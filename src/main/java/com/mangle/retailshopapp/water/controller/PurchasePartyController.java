@@ -6,6 +6,9 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mangle.retailshopapp.customer.model.CustomerRegisterDto;
+import com.mangle.retailshopapp.customer.model.CustomerTripLedger;
 import com.mangle.retailshopapp.customer.service.CustomerRegistrationService;
 import com.mangle.retailshopapp.water.model.CustomerPayment;
 import com.mangle.retailshopapp.water.model.CustomerPendingTripsDTO;
@@ -99,6 +103,13 @@ public class PurchasePartyController {
     public ResponseEntity<BigDecimal> caclculateTripAmount(@PathVariable String custId) {
         BigDecimal tripAmount = service.getCalculatedAmount(custId);
         return ResponseEntity.ok(tripAmount);
+    }
+
+    @GetMapping("/all-transactions")
+    public Page<CustomerTripLedger> getTransactions(@RequestParam int custId, @RequestParam int page,
+            @RequestParam int size) {
+        Sort.Direction direction = Sort.Direction.DESC;
+        return service.getPaginatedTransactions(custId, PageRequest.of(page, size, Sort.by(direction, "tripDateTime")));
     }
 
 }

@@ -10,6 +10,8 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -224,11 +226,19 @@ public class WaterTransactionService {
             Integer custId = (Integer) result.get("cust_id");
             String customerName = (String) result.get("cust_name");
             String contactNum = (String) result.get("contact_num");
-            int tripCount = result.get("TransactionCount") != null ? ((Number) result.get("TransactionCount")).intValue() : 0;
-            BigDecimal maxBalanceAmount = result.get("MaxBalanceAmount") != null ? BigDecimal.valueOf(((Number) result.get("MaxBalanceAmount")).doubleValue()) : BigDecimal.ZERO;
+            int tripCount = result.get("TransactionCount") != null
+                    ? ((Number) result.get("TransactionCount")).intValue()
+                    : 0;
+            BigDecimal maxBalanceAmount = result.get("MaxBalanceAmount") != null
+                    ? BigDecimal.valueOf(((Number) result.get("MaxBalanceAmount")).doubleValue())
+                    : BigDecimal.ZERO;
             return new CustomerPendingTripsDTO(custId, customerName, contactNum, tripCount, maxBalanceAmount);
         }).collect(Collectors.toList());
 
         return dtos;
+    }
+
+    public Page<CustomerTripLedger> getPaginatedTransactions(int custId, Pageable pageable) {
+        return customerTripLedgerRepository.findByCustId(custId, pageable);
     }
 }
