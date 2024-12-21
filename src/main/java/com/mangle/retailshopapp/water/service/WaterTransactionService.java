@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -19,12 +20,12 @@ import com.mangle.retailshopapp.credit.model.RcTxnHeader;
 import com.mangle.retailshopapp.credit.service.RcCreditReqService;
 import com.mangle.retailshopapp.credit.service.RcTxnHeaderService;
 import com.mangle.retailshopapp.customer.model.CustomerDetails;
-import com.mangle.retailshopapp.customer.model.CustomerRegisterDto;
 import com.mangle.retailshopapp.customer.model.CustomerTripLedger;
 import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
 import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
 import com.mangle.retailshopapp.customer.service.CustDetailsRechargeService;
 import com.mangle.retailshopapp.water.model.CustomerPayment;
+import com.mangle.retailshopapp.water.model.CustomerPendingTripsDTO;
 import com.mangle.retailshopapp.water.model.PaymentMethod;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
 import com.mangle.retailshopapp.water.model.WaterPurchaseTransactionDTO;
@@ -72,7 +73,7 @@ public class WaterTransactionService {
         return customerProfile.getCustomerName();
     }
 
-    private Optional<WaterPurchaseParty> getPartyContract(Integer customerId) {
+    public Optional<WaterPurchaseParty> getPartyContract(Integer customerId) {
         return Optional.ofNullable(waterPurchasePartyRepo.findPartyDetailsByCustomerId(customerId));
     }
 
@@ -116,21 +117,6 @@ public class WaterTransactionService {
         ledger.setCreditAmount(tripAmount);
         ledger.setDepositAmount(BigDecimal.ZERO);
         ledger.setBalanceAmount(tripAmount.add(latestBalanceAmount));
-        // RcTxnHeader header = new RcTxnHeader();
-        // header.setTxnDttm(LocalDateTime.now());
-        // header.setTxnTotalAmt(tripAmount);
-        // header.setAmtTndred(BigDecimal.valueOf(0));
-        // header.setAmtReturned(tripAmount.negate());
-
-        // header.setTxnDetails(new ArrayList<>());
-
-        // RcTxnDetail rcTxnDetail = new RcTxnDetail();
-        // rcTxnDetail.setTxnFlg("BNW");
-        // rcTxnDetail.setAmount(tripAmount);
-        // rcTxnDetail.setRcTxnHeader(header);
-        // rcTxnDetail.setRefCompany(" ");
-
-        // header.getTxnDetails().add(rcTxnDetail);
         return customerTripLedgerRepository.save(ledger);
     }
 
@@ -229,5 +215,20 @@ public class WaterTransactionService {
             return this.getTripAmount(contract.get());
         }
         return null;
+    }
+
+    public List<CustomerPendingTripsDTO> getRecentCustomersWithPendingTrips() {
+        List<Map<String, Object>> results = customerDetailsRepository.findRecentCustomersWithPendingTrips();
+
+        List<CustomerPendingTripsDTO> dtos = results.stream().map(result -> {
+            Integer custId = (Integer) result.get("cust_id");
+            String customerName = (String) result.get("cust_name");
+            String contactNum = (String) result.get("contact_num");
+            int tripCount = result.get("TransactionCount") != null ? ((Number) result.get("TransactionCount")).intValue() : 0;
+            BigDecimal maxBalanceAmount = result.get("MaxBalanceAmount") != null ? BigDecimal.valueOf(((Number) result.get("MaxBalanceAmount")).doubleValue()) : BigDecimal.ZERO;
+            return new CustomerPendingTripsDTO(custId, customerName, contactNum, tripCount, maxBalanceAmount);
+        }).collect(Collectors.toList());
+
+        return dtos;
     }
 }
