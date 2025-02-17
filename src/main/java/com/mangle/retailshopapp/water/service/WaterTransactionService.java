@@ -137,7 +137,7 @@ public class WaterTransactionService {
 
     private BigDecimal getTripAmount(WaterPurchaseParty contract) {
         int tripCount = getTripUnit(contract.getCapacity());
-        return new BigDecimal(tripCount * 30); // later keep this amount configurable
+        return new BigDecimal(tripCount * 40); // later keep this amount configurable
     }
 
     private int getTripUnit(int capacity) {
