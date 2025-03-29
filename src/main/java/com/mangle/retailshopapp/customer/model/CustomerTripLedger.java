@@ -36,4 +36,6 @@ public class CustomerTripLedger {
    @Column(name = "BALANCE_AMOUNT", precision = 10, scale = 2) 
    private BigDecimal balanceAmount;
     
+   @Column(name = "CRE_BY", nullable = false) 
+   private String credBy;
 }

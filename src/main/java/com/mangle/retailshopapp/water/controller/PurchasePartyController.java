@@ -1,6 +1,7 @@
 package com.mangle.retailshopapp.water.controller;
 
 import java.math.BigDecimal;
+import java.security.Principal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -60,14 +61,14 @@ public class PurchasePartyController {
 
     @PostMapping("/record-trip")
     public WaterPurchaseTransactionDTO performTransaction(@RequestParam Integer customerId,
-            @RequestParam Integer tripAmount) {
-        return service.generateAndSaveTrip(customerId, tripAmount);
+            @RequestParam Integer tripAmount, Principal principal) {
+        return service.generateAndSaveTrip(customerId, tripAmount,principal.getName());
     }
 
     @PostMapping("/deposit-amount")
     public WaterPurchaseTransactionDTO depositTransaction(@RequestParam Integer customerId,
-            @RequestBody CustomerPayment custPayment) {
-        return service.persistPayment(customerId, custPayment);
+            @RequestBody CustomerPayment custPayment, Principal principal) {
+        return service.persistPayment(customerId, custPayment, principal.getName());
     }
 
     @PostMapping("/register")

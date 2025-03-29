@@ -35,9 +35,9 @@ public class AuthenticationController {
             throws Exception {
         authenticate(authenticationRequest.getUsername(), authenticationRequest.getPassword());
         final UserDetails userDetails = userDetailsService.loadUserByUsername(authenticationRequest.getUsername());
-        final String jwt = jwtTokenUtil.generateToken(userDetails);
-
-        return ResponseEntity.ok(new AuthenticationResponse(jwt));
+        final String accessToken = jwtTokenUtil.generateAccessToken(userDetails);
+        final String refreshToken = jwtTokenUtil.generateRefreshToken(userDetails);
+        return ResponseEntity.ok(new AuthenticationResponse(accessToken, refreshToken));
     }
 
     @RequestMapping(value = "/signup", method = RequestMethod.POST)

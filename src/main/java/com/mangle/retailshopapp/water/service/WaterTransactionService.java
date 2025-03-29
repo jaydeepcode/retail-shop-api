@@ -80,7 +80,7 @@ public class WaterTransactionService {
     }
 
     @Transactional
-    public WaterPurchaseTransactionDTO generateAndSaveTrip(Integer customerId, Integer tripAmount) {
+    public WaterPurchaseTransactionDTO generateAndSaveTrip(Integer customerId, Integer tripAmount, String username) {
 
         WaterPurchaseTransactionDTO purchaseTransactionDTO = new WaterPurchaseTransactionDTO();
         List<CustomerTripLedger> unpaidCustomerTrips = customerTripLedgerRepository
@@ -89,7 +89,7 @@ public class WaterTransactionService {
                 ? unpaidCustomerTrips.get(0).getBalanceAmount()
                 : BigDecimal.ZERO;
         CustomerTripLedger tripLedgerTxn = generateCreditTransction(customerId, BigDecimal.valueOf(tripAmount),
-                latestBalanceAmount);
+                latestBalanceAmount,username);
 
         unpaidCustomerTrips.add(tripLedgerTxn);
 
@@ -111,7 +111,7 @@ public class WaterTransactionService {
     }
 
     private CustomerTripLedger generateCreditTransction(Integer customerId, BigDecimal tripAmount,
-            BigDecimal latestBalanceAmount) {
+            BigDecimal latestBalanceAmount,String username) {
 
         CustomerTripLedger ledger = new CustomerTripLedger();
         ledger.setCustId(customerId);
@@ -119,11 +119,12 @@ public class WaterTransactionService {
         ledger.setCreditAmount(tripAmount);
         ledger.setDepositAmount(BigDecimal.ZERO);
         ledger.setBalanceAmount(tripAmount.add(latestBalanceAmount));
+        ledger.setCredBy(username);
         return customerTripLedgerRepository.save(ledger);
     }
 
     private CustomerTripLedger generateDepositTransction(Integer customerId, BigDecimal depositAmount,
-            BigDecimal latestBalanceAmount) {
+            BigDecimal latestBalanceAmount,String username) {
 
         CustomerTripLedger ledger = new CustomerTripLedger();
         ledger.setCustId(customerId);
@@ -131,6 +132,7 @@ public class WaterTransactionService {
         ledger.setCreditAmount(BigDecimal.ZERO);
         ledger.setDepositAmount(depositAmount);
         ledger.setBalanceAmount(latestBalanceAmount.subtract(depositAmount));
+        ledger.setCredBy(username);
 
         return customerTripLedgerRepository.save(ledger);
     }
@@ -147,13 +149,13 @@ public class WaterTransactionService {
         return (capacity + 499) / 500;
     }
 
-    public WaterPurchaseTransactionDTO persistPayment(Integer customerId, CustomerPayment customerPayment) {
+    public WaterPurchaseTransactionDTO persistPayment(Integer customerId, CustomerPayment customerPayment, String username) {
         // ***** Next two lines performs payment and clears trips */
         List<CustomerTripLedger> unpaidCustomerTrips = customerTripLedgerRepository
                 .findLatestTransactionsAfterZeroBalance(customerId);
         BigDecimal latestBalanceAmount = unpaidCustomerTrips.size() > 0 ? unpaidCustomerTrips.get(0).getBalanceAmount()
                 : BigDecimal.ZERO;
-        generateDepositTransction(customerId, customerPayment.getPaymentAmount(), latestBalanceAmount);
+        generateDepositTransction(customerId, customerPayment.getPaymentAmount(), latestBalanceAmount,username);
         RcTxnHeader paidTransaction = generateRechargeCashTransaction(customerPayment);
 
         if (customerPayment.getPaymentMode() == PaymentMethod.UPI) {

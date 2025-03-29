@@ -39,7 +39,17 @@ public class JwtRequestFilter extends OncePerRequestFilter {
                 username = jwtUtil.extractUsername(jwt);
             } catch (ExpiredJwtException e) {
                 // Handle expired token
-                System.out.println("Token has expired");
+                String refreshToken = request.getHeader("Refresh-Token");
+                if (refreshToken != null) {
+                    // Try to refresh the token
+                    String newAccessToken = refreshToken(refreshToken);
+                    if (newAccessToken != null) {
+                        // Set the new access token in the response header
+                        //response.setHeader("New-Access-Token", newAccessToken);
+                        jwt = newAccessToken;
+                        username = jwtUtil.extractUsername(jwt);
+                    }
+                }
             }
         }
 
@@ -56,4 +66,13 @@ public class JwtRequestFilter extends OncePerRequestFilter {
         chain.doFilter(request, response);
     }
 
+    private String refreshToken(String refreshToken) {
+        // Call the refresh token endpoint to get a new access token
+        return jwtUtil.generateAccessToken( this.myUserDetailsService.loadUserByUsername(jwtUtil.extractUsername(refreshToken)));
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return request.getServletPath().equals("/api/refresh-token");
+    }
 }

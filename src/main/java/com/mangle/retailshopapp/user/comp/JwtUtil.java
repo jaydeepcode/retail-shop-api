@@ -15,20 +15,29 @@ import io.jsonwebtoken.SignatureAlgorithm;
 @Component
 public class JwtUtil {
     private String SECRET_KEY = "secret";
+    private static final long ACCESS_TOKEN_EXPIRATION = 12 * 60 * 1000; // 15 minutes
+    private static final long REFRESH_TOKEN_EXPIRATION = 1 * 24 * 60 * 60 * 1000; // 7 days
 
-    public String generateToken(UserDetails userDetails) {
+     // Generate access token (short-lived)
+     public String generateAccessToken(UserDetails userDetails) {
         Map<String, Object> claims = new HashMap<>();
-        return createToken(claims, userDetails.getUsername());
+        return createToken(claims, userDetails.getUsername(), ACCESS_TOKEN_EXPIRATION); // 15 minutes
     }
 
-    private String createToken(Map<String, Object> claims, String username) {
+    // Generate refresh token (long-lived)
+    public String generateRefreshToken(UserDetails userDetails) {
+        Map<String, Object> claims = new HashMap<>();
+        return createToken(claims, userDetails.getUsername(), REFRESH_TOKEN_EXPIRATION); // 7 days
+    }
+
+    private String createToken(Map<String, Object> claims, String username, long expirationTime) {
         return Jwts.builder().setClaims(claims).setSubject(username)
                 .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 10))
+                .setExpiration(new Date(System.currentTimeMillis() + expirationTime))
                 .signWith(SignatureAlgorithm.HS256, SECRET_KEY).compact();
     }
 
-    Boolean validateToken(String token, UserDetails userDetails) {
+    public Boolean validateToken(String token, UserDetails userDetails) {
         final String username = extractUsername(token);
         return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
     }
