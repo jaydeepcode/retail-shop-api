@@ -5,7 +5,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.client.RestTemplate;
 
 import com.mangle.retailshopapp.water.model.StatusResponse;
 
@@ -13,16 +12,12 @@ import com.mangle.retailshopapp.water.model.StatusResponse;
 @RequestMapping("tank")
 public class TankController {
 
-    private RestTemplate restTemplate;
     @Value("${water.esp.api.url}")
     private String espWebApi;
 
     @Value("${water.esp.api.key}")
     private String apiKey;
 
-    public TankController(RestTemplate restTemplate) {
-        this.restTemplate = restTemplate;
-    }
 
     @GetMapping("/isEmpty")
     public ResponseEntity<String> getMotorStatus() {
