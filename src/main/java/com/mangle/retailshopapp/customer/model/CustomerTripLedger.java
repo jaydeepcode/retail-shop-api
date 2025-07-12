@@ -3,8 +3,13 @@ package com.mangle.retailshopapp.customer.model;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+import com.mangle.retailshopapp.water.model.PumpUsed;
+import com.mangle.retailshopapp.water.model.TripStatus;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -38,4 +43,18 @@ public class CustomerTripLedger {
     
    @Column(name = "CRE_BY", nullable = false) 
    private String credBy;
+
+   @Column(name = "pump_used") 
+   @Enumerated(EnumType.STRING)
+   private PumpUsed pumpUsed;
+
+   @Column(name = "status")
+   @Enumerated(EnumType.STRING)
+   private TripStatus status;
+
+   @Column(name = "start_time")
+   private LocalDateTime startTime;
+
+   @Column(name = "end_time")
+   private LocalDateTime endTime;
 }

@@ -9,8 +9,9 @@ import lombok.Data;
 
 @Data
 public class WaterPurchaseTransactionDTO {
-    String customerName;
-    WaterPurchaseParty waterPurchaseParty;
-    List<CustomerTripLedger> rcCreditReqList;
-    BigDecimal balanceAmount;
+    private Integer purchaseId;
+    private String customerName;
+    private WaterPurchaseParty waterPurchaseParty;
+    private List<CustomerTripLedger> rcCreditReqList;
+    private BigDecimal balanceAmount;
 }

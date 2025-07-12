@@ -9,6 +9,9 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.mangle.retailshopapp.water.model.MotorStatusResponse;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 @RestController
 @RequestMapping("/api/motor")
 public class MotorController {
+    private static final Logger logger = LoggerFactory.getLogger(MotorController.class);
     private final RestTemplate restTemplate;
 
     @Value("${water.esp.api.url}")
@@ -43,6 +47,16 @@ public class MotorController {
             return response;
         } catch (HttpClientErrorException e) {
             throw new ResponseStatusException(e.getStatusCode(), e.getMessage(), e);
+        }
+    }
+
+    @Scheduled(fixedRate = 60000) // Run every 60 seconds (1 minute)
+    public void pollMotorStatus() {
+        logger.info("Polling motor status to keep ESP server active .....");
+        try {
+            getMotorStatus();
+        } catch (Exception e) {
+            logger.error("Error polling motor status: {}", e.getMessage());
         }
     }
 

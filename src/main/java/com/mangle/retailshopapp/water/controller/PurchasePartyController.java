@@ -12,20 +12,15 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import com.mangle.retailshopapp.customer.model.CustomerRegisterDto;
 import com.mangle.retailshopapp.customer.model.CustomerTripLedger;
+import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
 import com.mangle.retailshopapp.customer.service.CustomerRegistrationService;
 import com.mangle.retailshopapp.water.model.CustomerPayment;
 import com.mangle.retailshopapp.water.model.CustomerPendingTripsDTO;
+import com.mangle.retailshopapp.water.model.TripStateDto;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
 import com.mangle.retailshopapp.water.model.WaterPurchaseTransactionDTO;
 import com.mangle.retailshopapp.water.service.WaterTransactionService;
@@ -39,6 +34,9 @@ public class PurchasePartyController {
 
     @Autowired
     private CustomerRegistrationService customerRegistrationService;
+    
+    @Autowired
+    private CustomerTripLedgerRepository customerTripLedgerRepository;
 
     @GetMapping("/transactions")
     public WaterPurchaseTransactionDTO searchCustomers(@RequestParam Integer customerId) {
@@ -59,10 +57,25 @@ public class PurchasePartyController {
         return null;
     }
 
+    @GetMapping("/in-progress-trip/{customerId}")
+    public ResponseEntity<TripStateDto> getInProgressTrip(@PathVariable Long customerId) {
+        return ResponseEntity.ok(service.getInProgressTrip(customerId));
+    }
+
     @PostMapping("/record-trip")
-    public WaterPurchaseTransactionDTO performTransaction(@RequestParam Integer customerId,
-            @RequestParam Integer tripAmount, Principal principal) {
-        return service.generateAndSaveTrip(customerId, tripAmount,principal.getName());
+    public ResponseEntity<WaterPurchaseTransactionDTO> recordTrip(
+            @RequestParam Integer customerId,
+            @RequestParam Integer tripAmount,
+            @RequestParam String pumpUsed,
+            Principal principal) {
+        return ResponseEntity.ok(service.generateAndSaveTrip(customerId, tripAmount, pumpUsed, principal.getName()));
+    }
+
+    @PutMapping("/update-trip-time")
+    public ResponseEntity<List<CustomerTripLedger>> updateTripTime(
+            @RequestParam Integer customerId,
+            @RequestParam Integer tripId) {
+        return ResponseEntity.ok(service.updateTripTime(customerId, tripId));
     }
 
     @PostMapping("/deposit-amount")
@@ -111,6 +124,14 @@ public class PurchasePartyController {
             @RequestParam int size) {
         Sort.Direction direction = Sort.Direction.DESC;
         return service.getPaginatedTransactions(custId, PageRequest.of(page, size, Sort.by(direction, "tripDateTime")));
+    }    
+
+    @GetMapping("/check-filling-status")
+    public ResponseEntity<Integer> checkAnyTripInFillingStatus() {
+        Optional<Integer> fillingCustomerId = customerTripLedgerRepository.findCustomerWithInProgressTrip();
+        return fillingCustomerId
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
     }
 
 }

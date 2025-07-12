@@ -32,6 +32,9 @@ import com.mangle.retailshopapp.water.model.PaymentMethod;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
 import com.mangle.retailshopapp.water.model.WaterPurchaseTransactionDTO;
 import com.mangle.retailshopapp.water.repo.WaterPurchasePartyRepo;
+import com.mangle.retailshopapp.water.model.TripStatus;
+import com.mangle.retailshopapp.water.model.PumpUsed;
+import com.mangle.retailshopapp.water.model.TripStateDto;
 
 @Service
 public class WaterTransactionService {
@@ -50,7 +53,6 @@ public class WaterTransactionService {
 
     @Autowired
     private CustomerDetailsRepository customerDetailsRepository;
-
     @Autowired
     private CustDetailsRechargeService customerDetailsService;
 
@@ -80,7 +82,8 @@ public class WaterTransactionService {
     }
 
     @Transactional
-    public WaterPurchaseTransactionDTO generateAndSaveTrip(Integer customerId, Integer tripAmount, String username) {
+    public WaterPurchaseTransactionDTO generateAndSaveTrip(Integer customerId, Integer tripAmount, String pumpUsed,
+            String username) {
 
         WaterPurchaseTransactionDTO purchaseTransactionDTO = new WaterPurchaseTransactionDTO();
         List<CustomerTripLedger> unpaidCustomerTrips = customerTripLedgerRepository
@@ -88,8 +91,10 @@ public class WaterTransactionService {
         BigDecimal latestBalanceAmount = unpaidCustomerTrips.size() > 0
                 ? unpaidCustomerTrips.get(0).getBalanceAmount()
                 : BigDecimal.ZERO;
+
         CustomerTripLedger tripLedgerTxn = generateCreditTransction(customerId, BigDecimal.valueOf(tripAmount),
-                latestBalanceAmount,username);
+                latestBalanceAmount, username, pumpUsed);
+        purchaseTransactionDTO.setPurchaseId(tripLedgerTxn.getId());
 
         unpaidCustomerTrips.add(tripLedgerTxn);
 
@@ -111,7 +116,7 @@ public class WaterTransactionService {
     }
 
     private CustomerTripLedger generateCreditTransction(Integer customerId, BigDecimal tripAmount,
-            BigDecimal latestBalanceAmount,String username) {
+            BigDecimal latestBalanceAmount, String username, String pumpUsed) {
 
         CustomerTripLedger ledger = new CustomerTripLedger();
         ledger.setCustId(customerId);
@@ -119,12 +124,15 @@ public class WaterTransactionService {
         ledger.setCreditAmount(tripAmount);
         ledger.setDepositAmount(BigDecimal.ZERO);
         ledger.setBalanceAmount(tripAmount.add(latestBalanceAmount));
+        ledger.setPumpUsed(PumpUsed.valueOf(pumpUsed.toUpperCase()));
+        ledger.setStatus(TripStatus.FILLING);
+        ledger.setStartTime(LocalDateTime.now());
         ledger.setCredBy(username);
         return customerTripLedgerRepository.save(ledger);
     }
 
     private CustomerTripLedger generateDepositTransction(Integer customerId, BigDecimal depositAmount,
-            BigDecimal latestBalanceAmount,String username) {
+            BigDecimal latestBalanceAmount, String username) {
 
         CustomerTripLedger ledger = new CustomerTripLedger();
         ledger.setCustId(customerId);
@@ -149,13 +157,14 @@ public class WaterTransactionService {
         return (capacity + 499) / 500;
     }
 
-    public WaterPurchaseTransactionDTO persistPayment(Integer customerId, CustomerPayment customerPayment, String username) {
+    public WaterPurchaseTransactionDTO persistPayment(Integer customerId, CustomerPayment customerPayment,
+            String username) {
         // ***** Next two lines performs payment and clears trips */
         List<CustomerTripLedger> unpaidCustomerTrips = customerTripLedgerRepository
                 .findLatestTransactionsAfterZeroBalance(customerId);
         BigDecimal latestBalanceAmount = unpaidCustomerTrips.size() > 0 ? unpaidCustomerTrips.get(0).getBalanceAmount()
                 : BigDecimal.ZERO;
-        generateDepositTransction(customerId, customerPayment.getPaymentAmount(), latestBalanceAmount,username);
+        generateDepositTransction(customerId, customerPayment.getPaymentAmount(), latestBalanceAmount, username);
         RcTxnHeader paidTransaction = generateRechargeCashTransaction(customerPayment);
 
         if (customerPayment.getPaymentMode() == PaymentMethod.UPI) {
@@ -242,5 +251,41 @@ public class WaterTransactionService {
 
     public Page<CustomerTripLedger> getPaginatedTransactions(int custId, Pageable pageable) {
         return customerTripLedgerRepository.findByCustId(custId, pageable);
+    }
+
+    public TripStateDto getInProgressTrip(Long customerId) {
+        return customerTripLedgerRepository
+                .findFirstInProgressTrip(customerId.intValue())
+                .map(this::mapToTripDTO)
+                .orElse(null);
+    }
+
+    public List<CustomerTripLedger> updateTripTime(Integer customerId, Integer tripId) {
+        CustomerTripLedger ledger = customerTripLedgerRepository.findById(tripId)
+                .orElseThrow(() -> new IllegalArgumentException("Trip not found"));
+
+        if (ledger.getCustId() != customerId.intValue()) {
+            throw new IllegalArgumentException("Trip does not belong to the specified customer");
+        }
+
+        if (ledger.getStatus() != TripStatus.FILLING) {
+            throw new IllegalStateException("Trip is not in FILLING status");
+        }
+
+        ledger.setEndTime(LocalDateTime.now());
+        ledger.setStatus(TripStatus.COMPLETED);
+        customerTripLedgerRepository.save(ledger);
+        return customerTripLedgerRepository.findLatestTransactionsAfterZeroBalance(customerId);
+
+    }
+
+    private TripStateDto mapToTripDTO(CustomerTripLedger ledger) {
+        TripStateDto dto = new TripStateDto();
+        dto.setTripId(ledger.getId());
+        dto.setCustomerId(ledger.getCustId());
+        dto.setTripStatus(ledger.getStatus());
+        dto.setTripStartTime(ledger.getStartTime());
+        dto.setPumpUsed(ledger.getPumpUsed());
+        return dto;
     }
 }
