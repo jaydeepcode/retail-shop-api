@@ -1,26 +1,35 @@
 package com.mangle.retailshopapp.water.controller;
 
+import java.util.Collections;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import com.mangle.retailshopapp.customer.model.CustomerTripLedger;
+import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
 import com.mangle.retailshopapp.water.model.MotorStatusResponse;
-import org.springframework.beans.factory.annotation.Value;
 
 @RestController
 @RequestMapping("/api/motor")
 public class MotorController {
     private static final Logger logger = LoggerFactory.getLogger(MotorController.class);
     private final RestTemplate restTemplate;
+    private final CustomerTripLedgerRepository customerTripLedgerRepository;
 
     @Value("${water.esp.api.url}")
     private String espWebApi;
@@ -28,8 +37,9 @@ public class MotorController {
     @Value("${water.esp.api.key}")
     private String apiKey;
 
-    public MotorController(RestTemplate restTemplate) {
+    public MotorController(RestTemplate restTemplate, CustomerTripLedgerRepository customerTripLedgerRepository) {
         this.restTemplate = restTemplate;
+        this.customerTripLedgerRepository = customerTripLedgerRepository;
     }
 
     @GetMapping("/status")
@@ -98,6 +108,18 @@ public class MotorController {
                         "Cannot start pump while another pump is running", e);
             }
             throw new ResponseStatusException(e.getStatusCode(), e.getMessage(), e);
+        }
+    }
+
+    @GetMapping("/trip-time/{tripId}")
+    public ResponseEntity<Object> getTripStartTime(@PathVariable Integer tripId) {
+        try {
+            CustomerTripLedger trip = customerTripLedgerRepository.findById(tripId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Trip not found"));
+            
+            return ResponseEntity.ok(Collections.singletonMap("startTime", trip.getStartTime()));
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to fetch trip start time: " + e.getMessage());
         }
     }
 }
