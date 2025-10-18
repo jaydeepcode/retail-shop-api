@@ -20,7 +20,6 @@ import com.mangle.retailshopapp.user.model.UserDetails;
 import com.mangle.retailshopapp.user.repo.UserRepository;
 
 @RestController
-@RequestMapping("/api")
 public class UserController {
 
     @Autowired
