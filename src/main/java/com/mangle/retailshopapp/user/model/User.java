@@ -1,5 +1,6 @@
 package com.mangle.retailshopapp.user.model;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 
@@ -31,6 +32,21 @@ public class User {
 
     @Column(name = "ROLES", nullable = false, length = 80)
     private String roles;
+
+    @Column(name = "ACCOUNT_STATUS", nullable = false, length = 20)
+    private String accountStatus = "PENDING"; // PENDING, APPROVED, ACTIVE, SUSPENDED, DISABLED
+
+    @Column(name = "APPROVED_BY")
+    private Integer approvedBy; // Admin user ID who approved
+
+    @Column(name = "APPROVED_DATE")
+    private LocalDateTime approvedDate;
+
+    @Column(name = "LAST_LOGIN_DATE")
+    private LocalDateTime lastLoginDate;
+
+    @Column(name = "CREATED_DATE")
+    private LocalDateTime createdDate = LocalDateTime.now();
 
      // Get roles as a List<String>
      public List<String> getRoles() {

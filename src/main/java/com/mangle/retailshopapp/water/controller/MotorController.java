@@ -4,6 +4,7 @@ import java.util.Collections;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -11,21 +12,32 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.mangle.retailshopapp.audit.annotation.Auditable;
+import com.mangle.retailshopapp.audit.service.AuditLogService;
 import com.mangle.retailshopapp.customer.model.CustomerTripLedger;
 import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
+import com.mangle.retailshopapp.user.comp.JwtUtil;
+import com.mangle.retailshopapp.user.model.User;
+import com.mangle.retailshopapp.user.repo.UserRepository;
 import com.mangle.retailshopapp.water.model.MotorStatusResponse;
+import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
+import com.mangle.retailshopapp.water.repo.WaterPurchasePartyRepo;
 
 @RestController
-@RequestMapping("/api/motor")
+@RequestMapping("/motor")
 public class MotorController {
     private static final Logger logger = LoggerFactory.getLogger(MotorController.class);
     private final RestTemplate restTemplate;
@@ -36,6 +48,15 @@ public class MotorController {
 
     @Value("${water.esp.api.key}")
     private String apiKey;
+    
+    @Autowired
+    private AuditLogService auditLogService;
+    
+    @Autowired
+    private UserRepository userRepository;
+    
+    @Autowired
+    private WaterPurchasePartyRepo waterPartyRepository;
 
     public MotorController(RestTemplate restTemplate, CustomerTripLedgerRepository customerTripLedgerRepository) {
         this.restTemplate = restTemplate;
@@ -60,7 +81,7 @@ public class MotorController {
         }
     }
 
-    @Scheduled(fixedRate = 60000) // Run every 60 seconds (1 minute)
+    @Scheduled(fixedRate = 120000) // Run every 60 seconds (2 minute)
     public void pollMotorStatus() {
         logger.info("Polling motor status to keep ESP server active .....");
         try {
@@ -71,9 +92,12 @@ public class MotorController {
     }
 
     @PostMapping("/pump/{pump}/{action}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'CUSTOMER')")
+    @Auditable(action = "PUMP_CONTROL")
     public ResponseEntity<Object> controlPump(
             @PathVariable String pump,
-            @PathVariable String action) {
+            @PathVariable String action,
+            @RequestParam(required = false) Integer waterPartyId) {
 
         // Validate pump parameter
         if (!pump.equals("inside") && !pump.equals("outside")) {
@@ -84,6 +108,35 @@ public class MotorController {
         if (!action.equals("start") && !action.equals("stop")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid action. Must be 'start' or 'stop'");
         }
+        
+        // Get authentication context
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        User user = userRepository.findByUsername(auth.getName());
+        boolean isAdmin = auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        
+        // Determine target waterPartyId and chargeable status
+        Integer targetPartyId = waterPartyId;
+        boolean isChargeable = true;
+        
+        if (!isAdmin) {
+            // Customer: use their own waterPartyId from token (if available)
+            targetPartyId = waterPartyId; // Could extract from JWT token if needed
+            isChargeable = true;
+        } else {
+            // Admin: non-chargeable if acting on behalf of customer
+            isChargeable = (waterPartyId == null);
+        }
+        
+        // Validate waterPartyId is APPROVED (if provided)
+        if (targetPartyId != null) {
+            WaterPurchaseParty party = waterPartyRepository.findById((long) targetPartyId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid customer"));
+            if (!"APPROVED".equals(party.getRegistrationStatus())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Customer not approved");
+            }
+        }
+        
         HttpHeaders headers = new HttpHeaders();
         headers.set("Authorization", apiKey);
 
@@ -98,6 +151,16 @@ public class MotorController {
                     Object.class);
 
             if (response.getStatusCode() == HttpStatus.OK) {
+                // Log the pump action
+                auditLogService.logPumpAction(
+                    user.getId(), 
+                    action, 
+                    pump, 
+                    targetPartyId, 
+                    isChargeable, 
+                    "127.0.0.1" // TODO: Extract real IP from request
+                );
+                
                 return response;
             }
 

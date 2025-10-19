@@ -1,6 +1,7 @@
 package com.mangle.retailshopapp.water.model;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -39,4 +40,26 @@ public class WaterPurchaseParty {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    // New columns for user authentication and approval workflow
+    @Column(name = "user_id")
+    private Integer userId; // Link to User table for authentication
+
+    @Column(name = "registration_status", nullable = false, length = 20)
+    private String registrationStatus = "PENDING"; // PENDING, APPROVED, REJECTED
+
+    @Column(name = "approved_by")
+    private Integer approvedBy; // Admin ID who approved
+
+    @Column(name = "approved_date")
+    private LocalDateTime approvedDate;
+
+    @Column(name = "is_active", nullable = false)
+    private boolean isActive = true;
+
+    @Column(name = "contact_number", length = 20)
+    private String contactNumber; // If not already present
+
+    @Column(name = "location", length = 255)
+    private String location; // Can reuse 'address' if preferred
 }
