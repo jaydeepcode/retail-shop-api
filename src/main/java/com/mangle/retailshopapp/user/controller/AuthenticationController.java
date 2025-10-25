@@ -12,6 +12,7 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -55,8 +56,10 @@ public class AuthenticationController {
         UserDetails userDetails = userDetailsService.loadUserByUsername(authenticationRequest.getUsername());
         User user = userRepository.findByUsername(authenticationRequest.getUsername());
         
-        // Check account status
-        if (!"APPROVED".equals(user.getAccountStatus()) && !"ACTIVE".equals(user.getAccountStatus())) {
+        // Check account status (allow null for legacy users)
+        if (StringUtils.hasText(user.getAccountStatus()) && 
+            !"APPROVED".equals(user.getAccountStatus()) && 
+            !"ACTIVE".equals(user.getAccountStatus())) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
                 Map.of("success", false, "message", "Account pending approval", 
                        "accountStatus", user.getAccountStatus())
@@ -67,9 +70,10 @@ public class AuthenticationController {
         Integer waterPartyId = null;
         Integer tankerCapacity = null;
         if (user.getRoles().contains("ROLE_CUSTOMER")) {
-            WaterPurchaseParty party = waterPartyRepository.findByUserId(user.getId()).orElse(null);
+            // Find WaterPurchaseParty through CustomerDetails relationship
+            WaterPurchaseParty party = waterPartyRepository.findByCustomerIdAndUserId(user.getId()).orElse(null);
             if (party != null) {
-                waterPartyId = party.getId();
+                waterPartyId = party.getCustomerId();
                 tankerCapacity = party.getCapacity();
             }
         }

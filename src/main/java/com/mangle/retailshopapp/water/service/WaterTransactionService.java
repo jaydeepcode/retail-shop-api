@@ -74,11 +74,11 @@ public class WaterTransactionService {
 
     private String getCustomerName(Integer customerId) {
         CustomerDetails customerProfile = this.customerDetailsRepository.getReferenceById(Long.valueOf(customerId));
-        return customerProfile.getCustomerName();
+        return customerProfile.getFirstName() + " " + customerProfile.getLastName(); // Or use getCustomerName() helper
     }
 
     public Optional<WaterPurchaseParty> getPartyContract(Integer customerId) {
-        return Optional.ofNullable(waterPurchasePartyRepo.findPartyDetailsByCustomerId(customerId));
+        return waterPurchasePartyRepo.findPartyDetailsByCustomerId(customerId);
     }
 
     @Transactional

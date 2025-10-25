@@ -25,9 +25,11 @@ public class User {
     @Column(name = "PASSWORD", nullable = false, length = 80)
     private String password;
 
-    @Column(name = "FIRST_NAME", nullable = false, length = 45)
+    // firstName and lastName moved to CustomerDetails for proper normalization
+    // Legacy fields kept temporarily for migration compatibility
+    @Column(name = "FIRST_NAME", length = 45)
     private String firstName;
-    @Column(name = "LAST_NAME", nullable = false, length = 45)
+    @Column(name = "LAST_NAME", length = 45)
     private String lastName;
 
     @Column(name = "ROLES", nullable = false, length = 80)

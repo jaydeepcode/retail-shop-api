@@ -53,15 +53,16 @@ public class SecurityConfig {
                 .authorizeHttpRequests((authorizeRequests) -> authorizeRequests
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/*", "/index.html", "/static/**", "/assets/**").permitAll()
-                        // Public endpoints
-                        .requestMatchers("/api/authenticate", "/api/customer/register", "/api/refresh-token").permitAll()
+                        // Public endpoints - specific paths first
+                        .requestMatchers("/authenticate", "/refresh-token").permitAll()
+                        .requestMatchers("/customer/register").permitAll()
                         
                         // Admin endpoints
-                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/admin/**").hasRole("ADMIN")
                         
                         // Customer endpoints
-                        .requestMatchers("/api/customer/**", "/api/motor/status").hasAnyRole("ADMIN", "CUSTOMER")
-                        .requestMatchers("/api/motor/pump/**").hasAnyRole("ADMIN", "CUSTOMER")
+                        .requestMatchers("/customer/**", "/motor/status").hasAnyRole("ADMIN", "CUSTOMER")
+                        .requestMatchers("/motor/pump/**").hasAnyRole("ADMIN", "CUSTOMER")
                         
                         .anyRequest().authenticated())
                 .sessionManagement((sessionManagement) -> sessionManagement

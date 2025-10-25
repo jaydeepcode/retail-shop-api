@@ -73,6 +73,10 @@ public class JwtRequestFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return request.getServletPath().equals("/api/refresh-token");
+        String path = request.getRequestURI();
+        boolean shouldNotFilter = path.equals("/refresh-token") || 
+               path.equals("/customer/register") ||
+               path.equals("/authenticate");
+        return shouldNotFilter;
     }
 }

@@ -29,7 +29,8 @@ public class CustomerRegistrationService {
             String custId) {
         WaterPurchaseParty waterPurchaseParty;
         if (StringUtils.hasLength(custId)) {
-            waterPurchaseParty = waterPurchasePartyRepository.findPartyDetailsByCustomerId(Integer.parseInt(custId));
+            waterPurchaseParty = waterPurchasePartyRepository.findPartyDetailsByCustomerId(Integer.parseInt(custId)).
+            orElseThrow(() -> new RuntimeException("Customer not found"));;
         } else {
             waterPurchaseParty = new WaterPurchaseParty();
         }
@@ -49,7 +50,14 @@ public class CustomerRegistrationService {
         if (StringUtils.hasLength(custId)) {
             customerDetails.setCustId(Integer.parseInt(custId));
         }
-        customerDetails.setCustomerName(customerRegisterDto.getCustomerName());
+        // Updated to use firstName/lastName
+        if (StringUtils.hasText(customerRegisterDto.getFirstName()) && StringUtils.hasText(customerRegisterDto.getLastName())) {
+            customerDetails.setFirstName(customerRegisterDto.getFirstName());
+            customerDetails.setLastName(customerRegisterDto.getLastName());
+        } else {
+            // Fallback to legacy customerName field
+            customerDetails.setCustomerName(customerRegisterDto.getCustomerName());
+        }
         customerDetails.setContactNum(customerRegisterDto.getContactNum());
         customerDetails.setCreDttm(LocalDateTime.now());
         return customerDetailsRepository.save(customerDetails);

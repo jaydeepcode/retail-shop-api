@@ -13,7 +13,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.mangle.retailshopapp.customer.model.CustomerDetails;
 import com.mangle.retailshopapp.customer.model.CustomerRegistrationRequest;
+import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
 import com.mangle.retailshopapp.user.model.User;
 import com.mangle.retailshopapp.user.repo.UserRepository;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
@@ -25,6 +27,9 @@ public class CustomerRegistrationController {
     
     @Autowired
     private UserRepository userRepository;
+    
+    @Autowired
+    private CustomerDetailsRepository customerDetailsRepository;
     
     @Autowired
     private WaterPurchasePartyRepo waterPartyRepository;
@@ -42,21 +47,28 @@ public class CustomerRegistrationController {
                 );
             }
             
-            // Create User
+            // Create User (authentication only)
             User user = new User();
             user.setUsername(request.getUsername());
             user.setPassword(passwordEncoder.encode(request.getPassword()));
-            user.setFirstName(request.getFirstName());
-            user.setLastName(request.getLastName());
             user.setRoles(List.of("ROLE_CUSTOMER"));
             user.setAccountStatus("PENDING");
             user.setCreatedDate(LocalDateTime.now());
             user = userRepository.save(user);
             
-            // Create WaterPurchaseParty
+            // Create Customer (business entity)
+            CustomerDetails customer = new CustomerDetails();
+            customer.setFirstName(request.getFirstName());
+            customer.setLastName(request.getLastName());
+            customer.setContactNum(request.getContactNumber());
+            customer.setUserId(user.getId());
+            customer.setActive(false); // Activated on approval
+            customer.setCreDttm(LocalDateTime.now());
+            customer = customerDetailsRepository.save(customer);
+            
+            // Create WaterPurchaseParty (business-specific)
             WaterPurchaseParty party = new WaterPurchaseParty();
-            party.setUserId(user.getId());
-            party.setCustomerId(user.getId()); // Or generate separate customer ID
+            party.setCustomerId(customer.getCustId()); // Now properly references customer
             party.setStorageType(request.getStorageType());
             party.setCapacity(request.getTankerCapacity());
             party.setVehicleNumber(request.getVehicleNumber());

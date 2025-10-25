@@ -41,9 +41,7 @@ public class WaterPurchaseParty {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
-    // New columns for user authentication and approval workflow
-    @Column(name = "user_id")
-    private Integer userId; // Link to User table for authentication
+    // user_id removed for proper normalization - access via rs_cust_dtls.user_id
 
     @Column(name = "registration_status", nullable = false, length = 20)
     private String registrationStatus = "PENDING"; // PENDING, APPROVED, REJECTED

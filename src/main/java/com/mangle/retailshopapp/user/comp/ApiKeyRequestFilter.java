@@ -77,8 +77,9 @@ public class ApiKeyRequestFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return path.equals("/api/authenticate") || 
-               path.equals("/api/customer/register") ||
-               path.equals("/api/refresh-token");
+        boolean shouldNotFilter = path.equals("/authenticate") || 
+               path.equals("/customer/register") ||
+               path.equals("/refresh-token");
+        return shouldNotFilter;
     }
 }

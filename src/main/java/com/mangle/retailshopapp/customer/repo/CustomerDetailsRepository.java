@@ -11,10 +11,10 @@ import com.mangle.retailshopapp.customer.model.CustomerDetails;
 
 public interface CustomerDetailsRepository extends JpaRepository<CustomerDetails, Long> {
 
-    @Query("select c from CustomerDetails c where c.customerName like %:customerName% and c.custId in (select w.customerId from WaterPurchaseParty w)")
+    @Query("select c from CustomerDetails c where (CONCAT(c.firstName, ' ', c.lastName) like %:customerName% OR c.firstName like %:customerName% OR c.lastName like %:customerName%) and c.custId in (select w.customerId from WaterPurchaseParty w)")
     List<CustomerDetails> findCustomersByName(@Param("customerName") String customerName);
 
-    @Query("select c from CustomerDetails c where c.customerName like %:bankName%")
+    @Query("select c from CustomerDetails c where (CONCAT(c.firstName, ' ', c.lastName) like %:bankName% OR c.firstName like %:bankName% OR c.lastName like %:bankName%)")
     CustomerDetails findBankByName(@Param("bankName") String bankName);
 
     boolean existsByContactNum(String contactNum);
@@ -48,7 +48,7 @@ public interface CustomerDetailsRepository extends JpaRepository<CustomerDetails
             )
             SELECT
                 customer_details.cust_id,
-                customer_details.cust_name,
+                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME) as cust_name,
                 customer_details.contact_num,
                 IFNULL(COUNT(purchase_details.id), 0) AS TransactionCount,
             	IFNULL(MAX(RankedPurchases.balance_amount),0) AS MaxBalanceAmount,
@@ -79,13 +79,13 @@ public interface CustomerDetailsRepository extends JpaRepository<CustomerDetails
                 )
             GROUP BY
                 customer_details.cust_id,
-                customer_details.cust_name,
+                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME),
                 customer_details.contact_num
             UNION
             ALL
             SELECT
                 customer_details.cust_id,
-                customer_details.cust_name,
+                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME) as cust_name,
                 customer_details.contact_num,
                 0 AS TransactionCount,
                 0 AS MaxBalanceAmount,
@@ -115,7 +115,7 @@ public interface CustomerDetailsRepository extends JpaRepository<CustomerDetails
                 )
             GROUP BY
                 customer_details.cust_id,
-                customer_details.cust_name,
+                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME),
                 customer_details.contact_num
             ORDER BY
                 TransactionCount DESC,
