@@ -59,6 +59,12 @@ public class RetailAppUserService implements UserDetailsService {
         userDto.setUsername(authenticationRequest.getUsername());
         userDto.setPassword(passwordEncoder.encode(authenticationRequest.getPassword()));
         userDto.setCreatedDate(LocalDateTime.now());
+        userDto.setAccountStatus("APPROVED");
+        userDto.setApprovedBy(0);
+        userDto.setApprovedDate(LocalDateTime.now());
+        userDto.setLastLoginDate(LocalDateTime.now());
+        userDto.setCreatedDate(LocalDateTime.now());
+        userDto.setCreatedDate(LocalDateTime.now());
         
         List<String> roles = new ArrayList<>();
         if(authenticationRequest.getRole().equals(SecurityConstants.ADMIN_USER))
@@ -77,10 +83,10 @@ public class RetailAppUserService implements UserDetailsService {
             customerDetails.setLastName(authenticationRequest.getLastName());
             customerDetails.setUserId(savedUser.getId());
             
-            // Use contactNumber if provided, otherwise fallback to username
+            // Use contactNumber if provided, otherwise fallback to N/A
             String contactNum = authenticationRequest.getContactNumber() != null 
                 ? authenticationRequest.getContactNumber() 
-                : authenticationRequest.getUsername();
+                : "N/A";
             customerDetails.setContactNum(contactNum);
             
             customerDetails.setCreDttm(LocalDateTime.now());

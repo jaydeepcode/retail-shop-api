@@ -76,6 +76,7 @@ public class JwtRequestFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         boolean shouldNotFilter = path.equals("/refresh-token") || 
                path.equals("/customer/register") ||
+               path.equals("/customer/check-mobile") ||
                path.equals("/authenticate");
         return shouldNotFilter;
     }

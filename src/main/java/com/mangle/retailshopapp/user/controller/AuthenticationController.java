@@ -51,6 +51,14 @@ public class AuthenticationController {
     @PostMapping("/authenticate")
     public ResponseEntity<?> createAuthenticationToken(@RequestBody AuthenticationRequest authenticationRequest,
             HttpServletRequest request) throws Exception {
+        try {
+            authenticate(authenticationRequest.getUsername(), authenticationRequest.getPassword());
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of(
+                "success", false,
+                "message", "Invalid username or password"
+            ));
+        }
         authenticate(authenticationRequest.getUsername(), authenticationRequest.getPassword());
         
         UserDetails userDetails = userDetailsService.loadUserByUsername(authenticationRequest.getUsername());

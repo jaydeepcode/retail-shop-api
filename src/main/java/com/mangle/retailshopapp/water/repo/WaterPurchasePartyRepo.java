@@ -14,6 +14,10 @@ public interface WaterPurchasePartyRepo extends JpaRepository<WaterPurchaseParty
     @Query("select w from WaterPurchaseParty w where w.customerId = :customerId")
     Optional<WaterPurchaseParty> findPartyDetailsByCustomerId(@Param("customerId") Integer customerId);
     
+    boolean existsByVehicleNumber(String vehicleNumber);
+    
+    Optional<WaterPurchaseParty> findByVehicleNumber(String vehicleNumber);
+    
     // New queries for enhanced functionality
     @Query("SELECT w FROM WaterPurchaseParty w JOIN CustomerDetails c ON w.customerId = c.custId WHERE c.userId = :userId")
     Optional<WaterPurchaseParty> findByCustomerIdAndUserId(@Param("userId") Integer userId);

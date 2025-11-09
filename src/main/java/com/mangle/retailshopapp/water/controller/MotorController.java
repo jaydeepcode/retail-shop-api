@@ -33,6 +33,7 @@ import com.mangle.retailshopapp.user.comp.JwtUtil;
 import com.mangle.retailshopapp.user.model.User;
 import com.mangle.retailshopapp.user.repo.UserRepository;
 import com.mangle.retailshopapp.water.model.MotorStatusResponse;
+import com.mangle.retailshopapp.water.model.PumpStatus;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
 import com.mangle.retailshopapp.water.repo.WaterPurchasePartyRepo;
 
@@ -48,6 +49,13 @@ public class MotorController {
 
     @Value("${water.esp.api.key}")
     private String apiKey;
+    
+    @Value("${water.esp.mock.enabled:false}")
+    private boolean mockEnabled;
+    
+    // Mock state tracking
+    private String pumpInsideStatus = "OFF";
+    private String pumpOutsideStatus = "OFF";
     
     @Autowired
     private AuditLogService auditLogService;
@@ -65,6 +73,24 @@ public class MotorController {
 
     @GetMapping("/status")
     public ResponseEntity<MotorStatusResponse> getMotorStatus() {
+        if (mockEnabled) {
+            // Return mock response with current state
+            MotorStatusResponse mockResponse = new MotorStatusResponse();
+            
+            PumpStatus insideStatus = new PumpStatus();
+            insideStatus.setStatus(pumpInsideStatus);
+            mockResponse.setPumpInside(insideStatus);
+            
+            PumpStatus outsideStatus = new PumpStatus();
+            outsideStatus.setStatus(pumpOutsideStatus);
+            mockResponse.setPumpOutside(outsideStatus);
+            
+            mockResponse.setWaterLevel("NORMAL");
+            mockResponse.setTimestamp(System.currentTimeMillis());
+            
+            return ResponseEntity.ok(mockResponse);
+        }
+        
         HttpHeaders headers = new HttpHeaders();
         headers.set("Authorization", apiKey);
         HttpEntity<String> entity = new HttpEntity<>(headers);
@@ -135,6 +161,36 @@ public class MotorController {
             if (!"APPROVED".equals(party.getRegistrationStatus())) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Customer not approved");
             }
+        }
+        
+        if (mockEnabled) {
+            // Mock mode: update state and return mock response
+            if (action.equals("start")) {
+                if (pump.equals("inside")) {
+                    pumpInsideStatus = "ON";
+                } else {
+                    pumpOutsideStatus = "ON";
+                }
+            } else if (action.equals("stop")) {
+                if (pump.equals("inside")) {
+                    pumpInsideStatus = "OFF";
+                } else {
+                    pumpOutsideStatus = "OFF";
+                }
+            }
+            
+            // Log the pump action
+            auditLogService.logPumpAction(
+                user.getId(), 
+                action, 
+                pump, 
+                targetPartyId, 
+                isChargeable, 
+                "127.0.0.1" // TODO: Extract real IP from request
+            );
+            
+            // Return mock success response
+            return ResponseEntity.ok(Collections.singletonMap("status", "success"));
         }
         
         HttpHeaders headers = new HttpHeaders();

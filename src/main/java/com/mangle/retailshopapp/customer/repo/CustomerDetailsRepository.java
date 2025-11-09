@@ -13,6 +13,10 @@ import com.mangle.retailshopapp.customer.model.CustomerDetails;
 public interface CustomerDetailsRepository extends JpaRepository<CustomerDetails, Long> {
 
     Optional<CustomerDetails> findByUserId(Integer userId);
+    
+    Optional<CustomerDetails> findByContactNum(String contactNum);
+    
+    Optional<CustomerDetails> findByCustId(Integer custId);
 
     @Query("select c from CustomerDetails c where (CONCAT(c.firstName, ' ', c.lastName) like %:customerName% OR c.firstName like %:customerName% OR c.lastName like %:customerName%) and c.custId in (select w.customerId from WaterPurchaseParty w)")
     List<CustomerDetails> findCustomersByName(@Param("customerName") String customerName);

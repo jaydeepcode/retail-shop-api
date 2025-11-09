@@ -55,13 +55,14 @@ public class SecurityConfig {
                         .requestMatchers("/*", "/index.html", "/static/**", "/assets/**").permitAll()
                         // Public endpoints - specific paths first
                         .requestMatchers("/authenticate", "/refresh-token").permitAll()
-                        .requestMatchers("/customer/register").permitAll()
+                        .requestMatchers("/customer/register", "/customer/check-mobile").permitAll()
                         
                         // Admin endpoints
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         
                         // Customer endpoints
-                        .requestMatchers("/customer/**", "/motor/status").hasAnyRole("ADMIN", "CUSTOMER")
+                        .requestMatchers("/customer/**").hasAnyRole("ADMIN", "CUSTOMER")
+                        .requestMatchers("/motor/status").hasAnyRole("ADMIN", "CUSTOMER")
                         .requestMatchers("/motor/pump/**").hasAnyRole("ADMIN", "CUSTOMER")
                         
                         .anyRequest().authenticated())

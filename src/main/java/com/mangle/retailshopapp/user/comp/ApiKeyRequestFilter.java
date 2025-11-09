@@ -79,6 +79,7 @@ public class ApiKeyRequestFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         boolean shouldNotFilter = path.equals("/authenticate") || 
                path.equals("/customer/register") ||
+               path.equals("/customer/check-mobile") ||
                path.equals("/refresh-token");
         return shouldNotFilter;
     }
