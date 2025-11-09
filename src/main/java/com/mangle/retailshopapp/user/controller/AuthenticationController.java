@@ -116,11 +116,30 @@ public class AuthenticationController {
     @PostMapping("/signup")
     public ResponseEntity<?> createUser(@RequestBody RegisterUserVo authenticationRequest)
             throws Exception {
-        User user = userDetailsService.saveUser(authenticationRequest);
-        if (Objects.nonNull(user)) {
-            return ResponseEntity.ok(String.format("User %s successfully created", user.getUsername()));
+        try {
+            User user = userDetailsService.saveUser(authenticationRequest);
+            if (Objects.nonNull(user)) {
+                return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", String.format("User %s successfully created", user.getUsername()),
+                    "userId", user.getId()
+                ));
+            }
+            return ResponseEntity.badRequest().body(Map.of(
+                "success", false,
+                "message", "User not created"
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "success", false,
+                "message", e.getMessage()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                "success", false,
+                "message", "An error occurred during registration: " + e.getMessage()
+            ));
         }
-        return ResponseEntity.ok("User not created");
     }
 
     private void authenticate(String username, String password) throws Exception {

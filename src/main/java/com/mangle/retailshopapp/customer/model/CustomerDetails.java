@@ -37,6 +37,9 @@ public class CustomerDetails {
     @Column(name = "IS_ACTIVE", nullable = false)
     private boolean isActive = true;
 
+    @Column(name = "IS_ADMIN", nullable = false)
+    private boolean isAdmin = false;
+
     @Column(name = "CRE_DTTM", nullable = false)
     private LocalDateTime creDttm;
 

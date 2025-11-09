@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.mangle.retailshopapp.customer.model.CustomerDetails;
+import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
 import com.mangle.retailshopapp.user.comp.JwtUtil;
 import com.mangle.retailshopapp.user.model.User;
 import com.mangle.retailshopapp.user.model.UserDetails;
@@ -24,6 +26,9 @@ public class UserController {
 
     @Autowired
     UserRepository userRepository;
+
+    @Autowired
+    CustomerDetailsRepository customerDetailsRepository;
 
     @Autowired
     private JwtUtil jwtTokenUtil;
@@ -38,7 +43,14 @@ public class UserController {
         Collection<? extends GrantedAuthority> authorities = authentication.getAuthorities();
         User userInformation = userRepository.findByUsername(username);
 
-        return new UserDetails(username, authorities, userInformation.getFirstName(), userInformation.getLastName());
+        // Fetch names from CustomerDetails (works for both customers and admins)
+        CustomerDetails customer = customerDetailsRepository.findByUserId(userInformation.getId())
+            .orElse(null);
+
+        String firstName = customer != null ? customer.getFirstName() : "Unknown";
+        String lastName = customer != null ? customer.getLastName() : "User";
+
+        return new UserDetails(username, authorities, firstName, lastName);
     }
 
     @PostMapping("/refresh-token")

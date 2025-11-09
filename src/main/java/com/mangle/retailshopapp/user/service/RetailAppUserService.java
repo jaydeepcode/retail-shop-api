@@ -1,5 +1,6 @@
 package com.mangle.retailshopapp.user.service;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -12,6 +13,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import com.mangle.retailshopapp.config.SecurityConstants;
+import com.mangle.retailshopapp.customer.model.CustomerDetails;
+import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
 import com.mangle.retailshopapp.user.model.RegisterUserVo;
 import com.mangle.retailshopapp.user.model.RetailAppUser;
 import com.mangle.retailshopapp.user.model.User;
@@ -22,11 +25,17 @@ public class RetailAppUserService implements UserDetailsService {
 
     UserRepository userRepository;
     PasswordEncoder passwordEncoder;
+    CustomerDetailsRepository customerDetailsRepository;
 
     @Autowired
-    public void setUserRepository(UserRepository userRepository,PasswordEncoder passwordEncoder) {
+    public void setUserRepository(UserRepository userRepository, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+    }
+
+    @Autowired
+    public void setCustomerDetailsRepository(CustomerDetailsRepository customerDetailsRepository) {
+        this.customerDetailsRepository = customerDetailsRepository;
     }
 
     @Override
@@ -39,11 +48,17 @@ public class RetailAppUserService implements UserDetailsService {
     }
 
     public User saveUser(RegisterUserVo authenticationRequest) {
+        // Check if username already exists
+        User existingUser = userRepository.findByUsername(authenticationRequest.getUsername());
+        if (existingUser != null) {
+            throw new IllegalArgumentException("Username already exists. Please choose a different username.");
+        }
+        
+        // Create and save User entity
         User userDto = new User();
         userDto.setUsername(authenticationRequest.getUsername());
         userDto.setPassword(passwordEncoder.encode(authenticationRequest.getPassword()));
-        userDto.setFirstName(authenticationRequest.getFirstName());
-        userDto.setLastName(authenticationRequest.getLastName());
+        userDto.setCreatedDate(LocalDateTime.now());
         
         List<String> roles = new ArrayList<>();
         if(authenticationRequest.getRole().equals(SecurityConstants.ADMIN_USER))
@@ -53,7 +68,31 @@ public class RetailAppUserService implements UserDetailsService {
             roles.add(SecurityConstants.NORMAL_USER);
         }
         userDto.setRoles(roles);
-        return userRepository.save(userDto);
+        User savedUser = userRepository.save(userDto);
+        
+        // Create and save CustomerDetails to store firstName and lastName
+        if (authenticationRequest.getFirstName() != null && authenticationRequest.getLastName() != null) {
+            CustomerDetails customerDetails = new CustomerDetails();
+            customerDetails.setFirstName(authenticationRequest.getFirstName());
+            customerDetails.setLastName(authenticationRequest.getLastName());
+            customerDetails.setUserId(savedUser.getId());
+            
+            // Use contactNumber if provided, otherwise fallback to username
+            String contactNum = authenticationRequest.getContactNumber() != null 
+                ? authenticationRequest.getContactNumber() 
+                : authenticationRequest.getUsername();
+            customerDetails.setContactNum(contactNum);
+            
+            customerDetails.setCreDttm(LocalDateTime.now());
+            customerDetails.setActive(true);
+            
+            // Set isAdmin based on role
+            customerDetails.setAdmin(authenticationRequest.getRole().equals(SecurityConstants.ADMIN_USER));
+            
+            customerDetailsRepository.save(customerDetails);
+        }
+        
+        return savedUser;
     }
 
 }
