@@ -28,6 +28,7 @@ import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
 import com.mangle.retailshopapp.customer.service.CustDetailsRechargeService;
 import com.mangle.retailshopapp.water.model.CustomerPayment;
 import com.mangle.retailshopapp.water.model.CustomerPendingTripsDTO;
+import com.mangle.retailshopapp.water.model.CustomerWithCreditPointsDTO;
 import com.mangle.retailshopapp.water.model.PaymentMethod;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
 import com.mangle.retailshopapp.water.model.WaterPurchaseTransactionDTO;
@@ -35,6 +36,7 @@ import com.mangle.retailshopapp.water.repo.WaterPurchasePartyRepo;
 import com.mangle.retailshopapp.water.model.TripStatus;
 import com.mangle.retailshopapp.water.model.PumpUsed;
 import com.mangle.retailshopapp.water.model.TripStateDto;
+import com.mangle.retailshopapp.water.model.CreditBalanceDTO;
 
 @Service
 public class WaterTransactionService {
@@ -287,5 +289,73 @@ public class WaterTransactionService {
         dto.setTripStartTime(ledger.getStartTime());
         dto.setPumpUsed(ledger.getPumpUsed());
         return dto;
+    }
+
+    public CreditBalanceDTO getCreditBalance(Integer customerId) {
+        // Get balance amount from latest transactions after zero balance
+        List<CustomerTripLedger> unpaidCustomerTrips = customerTripLedgerRepository
+                .findLatestTransactionsAfterZeroBalance(customerId);
+        BigDecimal balanceAmount = unpaidCustomerTrips.size() > 0
+                ? unpaidCustomerTrips.get(0).getBalanceAmount()
+                : BigDecimal.ZERO;
+
+        // Check if customer has an active trip (FILLING status)
+        Optional<CustomerTripLedger> activeTrip = customerTripLedgerRepository
+                .findFirstInProgressTrip(customerId);
+        boolean hasActiveTrip = activeTrip.isPresent();
+
+        // Get customer capacity from WaterPurchaseParty
+        Optional<WaterPurchaseParty> partyContract = getPartyContract(customerId);
+        if (!partyContract.isPresent()) {
+            return new CreditBalanceDTO(balanceAmount, 0, hasActiveTrip);
+        }
+
+        // Calculate trip cost using existing getTripAmount() method
+        BigDecimal tripCost = getTripAmount(partyContract.get());
+
+        // Calculate credit points (pending trips count) as balanceAmount / tripCost
+        int creditPoints = 0;
+        if (tripCost.compareTo(BigDecimal.ZERO) > 0) {
+            creditPoints = balanceAmount.divide(tripCost, 0, java.math.RoundingMode.DOWN).intValue();
+        }
+
+        return new CreditBalanceDTO(balanceAmount, creditPoints, hasActiveTrip);
+    }
+
+    public List<TripStateDto> getPendingTrips(Integer customerId) {
+        // Get all unpaid trips after last zero balance
+        List<CustomerTripLedger> unpaidTrips = customerTripLedgerRepository
+                .findLatestTransactionsAfterZeroBalance(customerId);
+        
+        // Map to TripStateDto list using existing mapToTripDTO method
+        return unpaidTrips.stream()
+                .map(this::mapToTripDTO)
+                .collect(Collectors.toList());
+    }
+
+    public List<CustomerWithCreditPointsDTO> getTopCustomersWithCreditPoints() {
+        // Get top 6 recent customers (similar to getRecentCustomersWithPendingTrips)
+        List<Map<String, Object>> results = customerDetailsRepository.findRecentCustomersWithPendingTrips();
+
+        // For each customer, calculate credit points using getCreditBalance()
+        List<CustomerWithCreditPointsDTO> dtos = results.stream().map(result -> {
+            Integer custId = (Integer) result.get("cust_id");
+            String customerName = (String) result.get("cust_name");
+            String contactNum = (String) result.get("contact_num");
+
+            // Get credit balance which includes credit points and hasActiveTrip
+            CreditBalanceDTO creditBalance = getCreditBalance(custId);
+            
+            return new CustomerWithCreditPointsDTO(
+                custId,
+                customerName,
+                contactNum,
+                creditBalance.getCreditPoints(),
+                creditBalance.getBalanceAmount(),
+                creditBalance.getHasActiveTrip()
+            );
+        }).collect(Collectors.toList());
+
+        return dtos;
     }
 }

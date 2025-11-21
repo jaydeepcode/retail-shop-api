@@ -7,7 +7,9 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.Data;
 
 @Data
@@ -34,11 +36,14 @@ public class CustomerDetails {
     @Column(name = "USER_ID")
     private Integer userId;
 
-    @Column(name = "IS_ACTIVE", nullable = false)
-    private boolean isActive = true;
-
     @Column(name = "IS_ADMIN", nullable = false)
     private boolean isAdmin = false;
+
+    @Column(name = "STATUS_CODE", length = 20)
+    private String statusCode = "PENDING";
+
+    @Transient
+    private boolean active = false;
 
     @Column(name = "CRE_DTTM", nullable = false)
     private LocalDateTime creDttm;
@@ -60,6 +65,25 @@ public class CustomerDetails {
             this.firstName = fullName;
             this.lastName = ".";
         }
+    }
+
+    public boolean isActive() {
+        return active;
+    }
+
+    public void setActive(boolean active) {
+        this.active = active;
+        this.statusCode = active ? "ACTIVE" : "INACTIVE";
+    }
+
+    public void setStatusCode(String statusCode) {
+        this.statusCode = statusCode;
+        this.active = "ACTIVE".equalsIgnoreCase(statusCode);
+    }
+
+    @PostLoad
+    private void syncActiveFromStatus() {
+        this.active = "ACTIVE".equalsIgnoreCase(this.statusCode);
     }
 
 }

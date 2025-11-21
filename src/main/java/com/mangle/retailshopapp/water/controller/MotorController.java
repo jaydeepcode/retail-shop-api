@@ -29,7 +29,6 @@ import com.mangle.retailshopapp.audit.annotation.Auditable;
 import com.mangle.retailshopapp.audit.service.AuditLogService;
 import com.mangle.retailshopapp.customer.model.CustomerTripLedger;
 import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
-import com.mangle.retailshopapp.user.comp.JwtUtil;
 import com.mangle.retailshopapp.user.model.User;
 import com.mangle.retailshopapp.user.repo.UserRepository;
 import com.mangle.retailshopapp.water.model.MotorStatusResponse;
@@ -53,10 +52,6 @@ public class MotorController {
     @Value("${water.esp.mock.enabled:false}")
     private boolean mockEnabled;
     
-    // Mock state tracking
-    private String pumpInsideStatus = "OFF";
-    private String pumpOutsideStatus = "OFF";
-    
     @Autowired
     private AuditLogService auditLogService;
     
@@ -66,13 +61,16 @@ public class MotorController {
     @Autowired
     private WaterPurchasePartyRepo waterPartyRepository;
 
+    private String pumpInsideStatus = "OFF";
+    private String pumpOutsideStatus = "OFF";
+
     public MotorController(RestTemplate restTemplate, CustomerTripLedgerRepository customerTripLedgerRepository) {
         this.restTemplate = restTemplate;
         this.customerTripLedgerRepository = customerTripLedgerRepository;
     }
 
     @GetMapping("/status")
-    public ResponseEntity<MotorStatusResponse> getMotorStatus() {
+    public ResponseEntity<Object> getMotorStatus() {
         if (mockEnabled) {
             // Return mock response with current state
             MotorStatusResponse mockResponse = new MotorStatusResponse();
@@ -96,11 +94,11 @@ public class MotorController {
         HttpEntity<String> entity = new HttpEntity<>(headers);
 
         try {
-            ResponseEntity<MotorStatusResponse> response = restTemplate.exchange(
+            ResponseEntity<Object> response = restTemplate.exchange(
                     espWebApi + "/status",
                     HttpMethod.GET,
                     entity,
-                    MotorStatusResponse.class);
+                    Object.class);
             return response;
         } catch (HttpClientErrorException e) {
             throw new ResponseStatusException(e.getStatusCode(), e.getMessage(), e);
@@ -158,27 +156,12 @@ public class MotorController {
         if (targetPartyId != null) {
             WaterPurchaseParty party = waterPartyRepository.findById((long) targetPartyId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid customer"));
-            if (!"APPROVED".equals(party.getRegistrationStatus())) {
+            if (!party.isActive()) {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Customer not approved");
             }
         }
         
         if (mockEnabled) {
-            // Mock mode: update state and return mock response
-            if (action.equals("start")) {
-                if (pump.equals("inside")) {
-                    pumpInsideStatus = "ON";
-                } else {
-                    pumpOutsideStatus = "ON";
-                }
-            } else if (action.equals("stop")) {
-                if (pump.equals("inside")) {
-                    pumpInsideStatus = "OFF";
-                } else {
-                    pumpOutsideStatus = "OFF";
-                }
-            }
-            
             // Log the pump action
             auditLogService.logPumpAction(
                 user.getId(), 
@@ -188,6 +171,12 @@ public class MotorController {
                 isChargeable, 
                 "127.0.0.1" // TODO: Extract real IP from request
             );
+
+            if ("inside".equals(pump)) {
+                pumpInsideStatus = action.equals("start") ? "ON" : "OFF";
+            } else {
+                pumpOutsideStatus = action.equals("start") ? "ON" : "OFF";
+            }
             
             // Return mock success response
             return ResponseEntity.ok(Collections.singletonMap("status", "success"));

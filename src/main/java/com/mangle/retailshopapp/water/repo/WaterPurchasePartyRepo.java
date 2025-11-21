@@ -22,33 +22,40 @@ public interface WaterPurchasePartyRepo extends JpaRepository<WaterPurchaseParty
     @Query("SELECT w FROM WaterPurchaseParty w JOIN CustomerDetails c ON w.customerId = c.custId WHERE c.userId = :userId")
     Optional<WaterPurchaseParty> findByCustomerIdAndUserId(@Param("userId") Integer userId);
     
-    List<WaterPurchaseParty> findByRegistrationStatus(String registrationStatus);
-    
-    List<WaterPurchaseParty> findByRegistrationStatusAndIsActive(String registrationStatus, boolean isActive);
-    
-    @Query("SELECT w FROM WaterPurchaseParty w WHERE w.registrationStatus = 'APPROVED' AND w.isActive = true")
-    List<WaterPurchaseParty> findApprovedAndActiveCustomers();
-    
-    // New queries that join with CustomerDetails table to get customer names
     @Query("SELECT new com.mangle.retailshopapp.water.model.WaterPurchasePartyWithNameDTO(" +
-           "w.id, w.customerId, w.storageType, w.capacity, w.address, c.userId, " +
-           "w.registrationStatus, w.contactNumber, " +
+           "w.id, w.customerId, w.storageTypeCode, " +
+           "CASE w.storageTypeCode " +
+           "    WHEN 'TANKER' THEN 'Tanker' " +
+           "    WHEN 'SMALL_PURCHASE' THEN 'Small Purchase' " +
+           "    ELSE 'Unknown' " +
+           "END, " +
+           "w.capacity, w.address, c.userId, " +
+           "COALESCE(u.accountStatus, c.statusCode, 'PENDING'), w.contactNumber, " +
            "CONCAT(c.firstName, ' ', c.lastName)) " +
            "FROM WaterPurchaseParty w " +
            "JOIN CustomerDetails c ON w.customerId = c.custId " +
-           "WHERE w.registrationStatus = 'PENDING' AND c.userId IS NOT NULL")
+           "LEFT JOIN User u ON u.id = c.userId " +
+           "WHERE COALESCE(u.accountStatus, c.statusCode, 'PENDING') = 'PENDING'")
     List<WaterPurchasePartyWithNameDTO> findPendingCustomersWithNames();
     
     @Query("SELECT new com.mangle.retailshopapp.water.model.WaterPurchasePartyWithNameDTO(" +
-           "w.id, w.customerId, w.storageType, w.capacity, w.address, c.userId, " +
-           "w.registrationStatus, w.contactNumber, " +
+           "w.id, w.customerId, w.storageTypeCode, " +
+           "CASE w.storageTypeCode " +
+           "    WHEN 'TANKER' THEN 'Tanker' " +
+           "    WHEN 'SMALL_PURCHASE' THEN 'Small Purchase' " +
+           "    ELSE 'Unknown' " +
+           "END, " +
+           "w.capacity, w.address, c.userId, " +
+           "COALESCE(u.accountStatus, c.statusCode, 'PENDING'), w.contactNumber, " +
            "CONCAT(c.firstName, ' ', c.lastName)) " +
            "FROM WaterPurchaseParty w " +
            "JOIN CustomerDetails c ON w.customerId = c.custId " +
            "LEFT JOIN CustomerTripLedger t ON w.customerId = t.custId " +
-           "WHERE (w.registrationStatus = 'APPROVED' AND w.isActive = true) OR c.userId IS NULL " +
-           "GROUP BY w.id, w.customerId, w.storageType, w.capacity, w.address, c.userId, " +
-           "w.registrationStatus, w.contactNumber, c.firstName, c.lastName " +
+           "LEFT JOIN User u ON u.id = c.userId " +
+           "WHERE COALESCE(u.accountStatus, c.statusCode, 'PENDING') IN ('APPROVED', 'ACTIVE') " +
+           "AND w.isActive = true " +
+           "GROUP BY w.id, w.customerId, w.storageTypeCode, w.capacity, w.address, c.userId, " +
+           "COALESCE(u.accountStatus, c.statusCode, 'PENDING'), w.contactNumber, c.firstName, c.lastName " +
            "ORDER BY MAX(t.tripDateTime) DESC, COUNT(t.id) DESC " +
            "LIMIT 10")
     List<WaterPurchasePartyWithNameDTO> findApprovedCustomersWithNames();

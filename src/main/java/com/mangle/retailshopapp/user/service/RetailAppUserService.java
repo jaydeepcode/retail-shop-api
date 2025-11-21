@@ -91,6 +91,7 @@ public class RetailAppUserService implements UserDetailsService {
             
             customerDetails.setCreDttm(LocalDateTime.now());
             customerDetails.setActive(true);
+            customerDetails.setStatusCode("ACTIVE");
             
             // Set isAdmin based on role
             customerDetails.setAdmin(authenticationRequest.getRole().equals(SecurityConstants.ADMIN_USER));

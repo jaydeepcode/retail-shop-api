@@ -6,3 +6,6 @@ public class DuplicateVehicleNumberException extends RegistrationException {
     }
 }
 
+
+
+

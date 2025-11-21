@@ -66,7 +66,9 @@ public class CustomerApprovalController {
             user.setApprovedDate(LocalDateTime.now());
             userRepository.save(user);
 
-            party.setRegistrationStatus("APPROVED");
+            customerDetails.setStatusCode("ACTIVE");
+            customerDetailsRepository.save(customerDetails);
+
             party.setApprovedBy(adminId);
             party.setApprovedDate(LocalDateTime.now());
             party.setActive(true);
@@ -109,7 +111,9 @@ public class CustomerApprovalController {
             user.setApprovedDate(LocalDateTime.now());
             userRepository.save(user);
 
-            party.setRegistrationStatus("REJECTED");
+            customerDetails.setStatusCode("INACTIVE");
+            customerDetailsRepository.save(customerDetails);
+
             party.setApprovedBy(adminId);
             party.setApprovedDate(LocalDateTime.now());
             party.setActive(false);

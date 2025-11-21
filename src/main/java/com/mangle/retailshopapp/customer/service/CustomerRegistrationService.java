@@ -169,7 +169,6 @@ public class CustomerRegistrationService {
 
         if (existingParty == null) {
             party.setCustomerId(customer.getCustId());
-            party.setRegistrationStatus("PENDING");
             party.setRegistrationDate(LocalDate.now());
             party.setActive(false);
         }
@@ -248,6 +247,7 @@ public class CustomerRegistrationService {
         }
         customerDetails.setContactNum(customerRegisterDto.getContactNum());
         customerDetails.setCreDttm(LocalDateTime.now());
+        customerDetails.setStatusCode("PENDING");
         return customerDetailsRepository.save(customerDetails);
     }
 }

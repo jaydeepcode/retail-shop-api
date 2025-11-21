@@ -29,106 +29,91 @@ public interface CustomerDetailsRepository extends JpaRepository<CustomerDetails
     @Query(value = """
             WITH LastZeroBalance AS (
                 SELECT
-                    purchase_details.cust_id,
-                    MAX(purchase_details.trip_date_time) AS LastZeroBalanceDate
+                    pd.cust_id,
+                    MAX(pd.trip_date_time) AS last_zero_balance_date
                 FROM
-                    wt_purchase_details purchase_details
+                    wt_purchase_details pd
                 WHERE
-                    purchase_details.balance_amount = 0
+                    pd.balance_amount = 0
                 GROUP BY
-                    purchase_details.cust_id
+                    pd.cust_id
             ),
-            RankedPurchases AS (
+            PendingTrips AS (
                 SELECT
-                    purchase_details.cust_id,
-                    purchase_details.balance_amount,
-                    purchase_details.trip_date_time,
-                    ROW_NUMBER() OVER(PARTITION BY purchase_details.cust_id ORDER BY purchase_details.trip_date_time DESC) AS RowNumber
+                    pd.cust_id,
+                    pd.trip_date_time,
+                    pd.balance_amount,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY pd.cust_id
+                        ORDER BY pd.trip_date_time DESC
+                    ) AS pending_rank
                 FROM
-                    wt_purchase_details purchase_details
-                JOIN
-                    LastZeroBalance zero_balance
-                    ON purchase_details.cust_id = zero_balance.cust_id
+                    wt_purchase_details pd
+                LEFT JOIN
+                    LastZeroBalance lzb
+                        ON pd.cust_id = lzb.cust_id
                 WHERE
-                    purchase_details.trip_date_time > zero_balance.LastZeroBalanceDate
-                    OR zero_balance.LastZeroBalanceDate IS NULL
+                    lzb.last_zero_balance_date IS NULL
+                    OR pd.trip_date_time > lzb.last_zero_balance_date
+            ),
+            PendingTripCounts AS (
+                SELECT
+                    pd.cust_id,
+                    COUNT(*) AS pending_trip_count
+                FROM
+                    wt_purchase_details pd
+                LEFT JOIN
+                    LastZeroBalance lzb
+                        ON pd.cust_id = lzb.cust_id
+                WHERE
+                    lzb.last_zero_balance_date IS NULL
+                    OR pd.trip_date_time > lzb.last_zero_balance_date
+                GROUP BY
+                    pd.cust_id
+            ),
+            LatestTrips AS (
+                SELECT
+                    pd.cust_id,
+                    pd.trip_date_time,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY pd.cust_id
+                        ORDER BY pd.trip_date_time DESC
+                    ) AS trip_rank
+                FROM
+                    wt_purchase_details pd
             )
             SELECT
-                customer_details.cust_id,
-                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME) as cust_name,
-                customer_details.contact_num,
-                IFNULL(COUNT(purchase_details.id), 0) AS TransactionCount,
-            	IFNULL(MAX(RankedPurchases.balance_amount),0) AS MaxBalanceAmount,
-                IFNULL(MAX(purchase_details.trip_date_time), 0) AS Latest_Trip_Date
+                cd.cust_id,
+                CONCAT(cd.FIRST_NAME, ' ', cd.LAST_NAME) AS cust_name,
+                cd.contact_num,
+                IFNULL(ptc.pending_trip_count, 0) AS TransactionCount,
+                IFNULL(pt.balance_amount, 0) AS MaxBalanceAmount,
+                COALESCE(lt.trip_date_time, lzb.last_zero_balance_date) AS Latest_Trip_Date
             FROM
-                rs_cust_dtls customer_details
+                rs_cust_dtls cd
+            INNER JOIN
+                wt_purchase_party purchase_party
+                    ON purchase_party.customer_id = cd.cust_id
             LEFT JOIN
-                RankedPurchases
-                    ON customer_details.cust_id = RankedPurchases.cust_id AND RankedPurchases.RowNumber = 1
+                LastZeroBalance lzb
+                    ON cd.cust_id = lzb.cust_id
             LEFT JOIN
-                wt_purchase_details purchase_details
-                    ON customer_details.cust_id = purchase_details.cust_id
+                PendingTripCounts ptc
+                    ON cd.cust_id = ptc.cust_id
             LEFT JOIN
-                LastZeroBalance zero_balance
-                    ON customer_details.cust_id = zero_balance.cust_id
-            WHERE
-                EXISTS (
-                    SELECT
-                        1
-                    FROM
-                        wt_purchase_party purchase_party
-                    WHERE
-                        purchase_party.customer_id = customer_details.cust_id
-                )
-                AND (
-                    purchase_details.trip_date_time > zero_balance.LastZeroBalanceDate
-                    OR zero_balance.LastZeroBalanceDate IS NULL
-                )
-            GROUP BY
-                customer_details.cust_id,
-                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME),
-                customer_details.contact_num
-            UNION
-            ALL
-            SELECT
-                customer_details.cust_id,
-                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME) as cust_name,
-                customer_details.contact_num,
-                0 AS TransactionCount,
-                0 AS MaxBalanceAmount,
-                zero_balance.LastZeroBalanceDate AS Latest_Trip_Date
-            FROM
-                rs_cust_dtls customer_details
+                PendingTrips pt
+                    ON cd.cust_id = pt.cust_id
+                    AND pt.pending_rank = 1
             LEFT JOIN
-                LastZeroBalance zero_balance
-                    ON customer_details.cust_id = zero_balance.cust_id
-            WHERE
-                EXISTS (
-                    SELECT
-                        1
-                    FROM
-                        wt_purchase_party purchase_party
-                    WHERE
-                        purchase_party.customer_id = customer_details.cust_id
-                )
-                AND NOT EXISTS (
-                    SELECT
-                        1
-                    FROM
-                        wt_purchase_details purchase_details
-                    WHERE
-                        purchase_details.cust_id = customer_details.cust_id
-                        AND purchase_details.trip_date_time > zero_balance.LastZeroBalanceDate
-                )
-            GROUP BY
-                customer_details.cust_id,
-                CONCAT(customer_details.FIRST_NAME, ' ', customer_details.LAST_NAME),
-                customer_details.contact_num
+                LatestTrips lt
+                    ON cd.cust_id = lt.cust_id
+                    AND lt.trip_rank = 1
             ORDER BY
-                TransactionCount DESC,
-                Latest_Trip_Date DESC
-             LIMIT
-                6    
+                COALESCE(pt.trip_date_time, lt.trip_date_time, lzb.last_zero_balance_date) IS NULL,
+                COALESCE(pt.trip_date_time, lt.trip_date_time, lzb.last_zero_balance_date) DESC,
+                cd.cust_id DESC
+            LIMIT
+                6
                            """, nativeQuery = true)
     List<Map<String, Object>> findRecentCustomersWithPendingTrips();
 }

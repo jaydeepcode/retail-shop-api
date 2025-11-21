@@ -23,3 +23,6 @@ public class CustomerCheckResponse {
     private String location;
 }
 
+
+
+

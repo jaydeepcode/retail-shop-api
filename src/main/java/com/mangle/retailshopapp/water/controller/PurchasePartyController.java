@@ -20,9 +20,11 @@ import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
 import com.mangle.retailshopapp.customer.service.CustomerRegistrationService;
 import com.mangle.retailshopapp.water.model.CustomerPayment;
 import com.mangle.retailshopapp.water.model.CustomerPendingTripsDTO;
+import com.mangle.retailshopapp.water.model.CustomerWithCreditPointsDTO;
 import com.mangle.retailshopapp.water.model.TripStateDto;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
 import com.mangle.retailshopapp.water.model.WaterPurchaseTransactionDTO;
+import com.mangle.retailshopapp.water.model.CreditBalanceDTO;
 import com.mangle.retailshopapp.water.service.WaterTransactionService;
 
 @RestController
@@ -132,6 +134,21 @@ public class PurchasePartyController {
         return fillingCustomerId
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.noContent().build());
+    }
+
+    @GetMapping("/credit-balance/{customerId}")
+    public ResponseEntity<CreditBalanceDTO> getCreditBalance(@PathVariable Integer customerId) {
+        return ResponseEntity.ok(service.getCreditBalance(customerId));
+    }
+
+    @GetMapping("/pending-trips/{customerId}")
+    public ResponseEntity<List<TripStateDto>> getPendingTrips(@PathVariable Integer customerId) {
+        return ResponseEntity.ok(service.getPendingTrips(customerId));
+    }
+
+    @GetMapping("/customers-with-credit-points")
+    public ResponseEntity<List<CustomerWithCreditPointsDTO>> getCustomersWithCreditPoints() {
+        return ResponseEntity.ok(service.getTopCustomersWithCreditPoints());
     }
 
 }

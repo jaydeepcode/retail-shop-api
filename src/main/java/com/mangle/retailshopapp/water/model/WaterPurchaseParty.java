@@ -2,13 +2,18 @@ package com.mangle.retailshopapp.water.model;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Locale;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.Data;
 
 @Data
@@ -23,7 +28,10 @@ public class WaterPurchaseParty {
     @Column(name = "customer_id", nullable = false)
     private int customerId;
 
-    @Column(name = "storage_type", nullable = false)
+    @Column(name = "STORAGE_TYPE_CODE", length = 30)
+    private String storageTypeCode;
+
+    @Transient
     private String storageType;
 
     @Column(name = "capacity", nullable = false)
@@ -41,11 +49,6 @@ public class WaterPurchaseParty {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
-    // user_id removed for proper normalization - access via rs_cust_dtls.user_id
-
-    @Column(name = "registration_status", nullable = false, length = 20)
-    private String registrationStatus = "PENDING"; // PENDING, APPROVED, REJECTED
-
     @Column(name = "approved_by")
     private Integer approvedBy; // Admin ID who approved
 
@@ -60,4 +63,54 @@ public class WaterPurchaseParty {
 
     @Column(name = "location", length = 255)
     private String location; // Can reuse 'address' if preferred
+
+    public String getStorageType() {
+        return storageType != null ? storageType : deriveStorageTypeLabel(this.storageTypeCode);
+    }
+
+    public void setStorageType(String storageType) {
+        this.storageType = storageType;
+        this.storageTypeCode = deriveStorageTypeCode(storageType);
+    }
+
+    public void setStorageTypeCode(String storageTypeCode) {
+        this.storageTypeCode = storageTypeCode;
+        this.storageType = deriveStorageTypeLabel(storageTypeCode);
+    }
+
+    @PrePersist
+    @PreUpdate
+    private void syncStorageTypeCode() {
+        if (this.storageType != null) {
+            this.storageTypeCode = deriveStorageTypeCode(this.storageType);
+        }
+    }
+
+    @PostLoad
+    private void hydrateStorageType() {
+        this.storageType = deriveStorageTypeLabel(this.storageTypeCode);
+    }
+
+    private static String deriveStorageTypeCode(String storageType) {
+        if (storageType == null || storageType.isBlank()) {
+            return "UNKNOWN";
+        }
+        String normalized = storageType.trim().toUpperCase(Locale.ROOT).replace(' ', '_');
+        return switch (normalized) {
+            case "TANKER" -> "TANKER";
+            case "SMALL_PURCHASE" -> "SMALL_PURCHASE";
+            default -> "UNKNOWN";
+        };
+    }
+
+    private static String deriveStorageTypeLabel(String storageTypeCode) {
+        if (storageTypeCode == null) {
+            return "Unknown";
+        }
+        return switch (storageTypeCode) {
+            case "TANKER" -> "Tanker";
+            case "SMALL_PURCHASE" -> "Small Purchase";
+            default -> "Unknown";
+        };
+    }
 }

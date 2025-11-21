@@ -44,11 +44,11 @@ public class CustomerTripLedger {
    @Column(name = "CRE_BY", nullable = false) 
    private String credBy;
 
-   @Column(name = "pump_used") 
+   @Column(name = "PUMP_USED_CODE", length = 30)
    @Enumerated(EnumType.STRING)
    private PumpUsed pumpUsed;
 
-   @Column(name = "status")
+   @Column(name = "STATUS_CODE", length = 30)
    @Enumerated(EnumType.STRING)
    private TripStatus status;
 
@@ -57,4 +57,5 @@ public class CustomerTripLedger {
 
    @Column(name = "end_time")
    private LocalDateTime endTime;
+
 }

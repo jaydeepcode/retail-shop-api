@@ -34,3 +34,7 @@ build/
 
 ### Static Resources ###
 src/main/resources/static/
+
+### Analysis and Documentation ###
+analysis/
+docs/
