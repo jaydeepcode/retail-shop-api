@@ -11,4 +11,5 @@ public class TripStateDto {
     private TripStatus tripStatus;  
     private PumpUsed pumpUsed;
     private LocalDateTime tripStartTime;
+    private Integer expectedDurationSeconds;
 }

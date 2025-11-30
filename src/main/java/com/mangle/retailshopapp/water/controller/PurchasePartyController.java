@@ -25,6 +25,10 @@ import com.mangle.retailshopapp.water.model.TripStateDto;
 import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
 import com.mangle.retailshopapp.water.model.WaterPurchaseTransactionDTO;
 import com.mangle.retailshopapp.water.model.CreditBalanceDTO;
+import com.mangle.retailshopapp.water.model.FlowRateDTO;
+import com.mangle.retailshopapp.water.model.EstimatedTimeResponse;
+import com.mangle.retailshopapp.water.model.PumpUsed;
+import com.mangle.retailshopapp.water.service.FlowRateService;
 import com.mangle.retailshopapp.water.service.WaterTransactionService;
 
 @RestController
@@ -33,6 +37,9 @@ public class PurchasePartyController {
 
     @Autowired
     private WaterTransactionService service;
+
+    @Autowired
+    private FlowRateService flowRateService;
 
     @Autowired
     private CustomerRegistrationService customerRegistrationService;
@@ -78,6 +85,15 @@ public class PurchasePartyController {
             @RequestParam Integer customerId,
             @RequestParam Integer tripId) {
         return ResponseEntity.ok(service.updateTripTime(customerId, tripId));
+    }
+
+    @PutMapping("/update-trip-amount")
+    public ResponseEntity<WaterPurchaseTransactionDTO> updateTripAmount(
+            @RequestParam Integer customerId,
+            @RequestParam Integer tripId,
+            @RequestParam Integer amount,
+            Principal principal) {
+        return ResponseEntity.ok(service.updateTripAmount(customerId, tripId, amount, principal.getName()));
     }
 
     @PostMapping("/deposit-amount")
@@ -149,6 +165,29 @@ public class PurchasePartyController {
     @GetMapping("/customers-with-credit-points")
     public ResponseEntity<List<CustomerWithCreditPointsDTO>> getCustomersWithCreditPoints() {
         return ResponseEntity.ok(service.getTopCustomersWithCreditPoints());
+    }
+
+    @GetMapping("/flow-rate/{customerId}")
+    public ResponseEntity<FlowRateDTO> getFlowRate(
+        @PathVariable Integer customerId,
+        @RequestParam(required = false) String pumpUsed) {
+        
+        PumpUsed pump = pumpUsed != null 
+            ? PumpUsed.valueOf(pumpUsed.toUpperCase()) 
+            : PumpUsed.BOTH;
+        
+        FlowRateDTO flowRate = flowRateService.getFlowRate(customerId, pump);
+        
+        return ResponseEntity.ok(flowRate);
+    }
+
+    @GetMapping("/estimated-time")
+    public ResponseEntity<EstimatedTimeResponse> getEstimatedTime(
+        @RequestParam Integer customerId,
+        @RequestParam String pumpUsed) {
+        
+        EstimatedTimeResponse response = service.getEstimatedTime(customerId, pumpUsed);
+        return ResponseEntity.ok(response);
     }
 
 }

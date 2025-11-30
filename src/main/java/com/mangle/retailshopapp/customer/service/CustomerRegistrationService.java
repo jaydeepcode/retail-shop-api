@@ -247,7 +247,9 @@ public class CustomerRegistrationService {
         }
         customerDetails.setContactNum(customerRegisterDto.getContactNum());
         customerDetails.setCreDttm(LocalDateTime.now());
-        customerDetails.setStatusCode("PENDING");
+        if (!StringUtils.hasLength(custId)) {
+            customerDetails.setStatusCode("PENDING");
+        }
         return customerDetailsRepository.save(customerDetails);
     }
 }

@@ -58,4 +58,16 @@ public class CustomerTripLedger {
    @Column(name = "end_time")
    private LocalDateTime endTime;
 
+   @Column(name = "expected_duration_sec")
+   private Integer expectedDurationSec;
+
+   @Column(name = "auto_stop_scheduled")
+   private Boolean autoStopScheduled = false;
+
+   @Column(name = "auto_stopped")
+   private Boolean autoStopped = false;
+
+   @Column(name = "auto_stop_attempted_at")
+   private LocalDateTime autoStopAttemptedAt;
+
 }

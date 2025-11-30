@@ -9,9 +9,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +42,9 @@ import com.mangle.retailshopapp.water.model.TripStatus;
 import com.mangle.retailshopapp.water.model.PumpUsed;
 import com.mangle.retailshopapp.water.model.TripStateDto;
 import com.mangle.retailshopapp.water.model.CreditBalanceDTO;
+import com.mangle.retailshopapp.water.model.FlowRateDTO;
+import com.mangle.retailshopapp.water.model.EstimatedTimeResponse;
+import com.mangle.retailshopapp.water.event.TripAutoStopEvent;
 
 @Service
 public class WaterTransactionService {
@@ -57,6 +65,14 @@ public class WaterTransactionService {
     private CustomerDetailsRepository customerDetailsRepository;
     @Autowired
     private CustDetailsRechargeService customerDetailsService;
+
+    @Autowired
+    private FlowRateService flowRateService;
+
+    @Autowired
+    private PumpAutoStopService pumpAutoStopService;
+
+    private static final Logger logger = LoggerFactory.getLogger(WaterTransactionService.class);
 
     public WaterPurchaseTransactionDTO getCustomerTransactions(Integer customerId) {
         WaterPurchaseTransactionDTO waterPurchaseTransactionDTO = new WaterPurchaseTransactionDTO();
@@ -96,6 +112,32 @@ public class WaterTransactionService {
 
         CustomerTripLedger tripLedgerTxn = generateCreditTransction(customerId, BigDecimal.valueOf(tripAmount),
                 latestBalanceAmount, username, pumpUsed);
+        
+        // Calculate expected duration and schedule auto-stop
+        Optional<WaterPurchaseParty> partyOpt = getPartyContract(customerId);
+        if (partyOpt.isPresent()) {
+            WaterPurchaseParty party = partyOpt.get();
+            PumpUsed pumpUsedEnum = PumpUsed.valueOf(pumpUsed.toUpperCase());
+            
+            // Calculate expected duration using flow rate service
+            FlowRateDTO flowRate = flowRateService.getFlowRateForEstimation(customerId, pumpUsedEnum);
+            
+            int expectedDuration = BigDecimal.valueOf(party.getCapacity())
+                .multiply(flowRate.getSecPerLiter())
+                .intValue();
+            tripLedgerTxn.setExpectedDurationSec(expectedDuration);
+            tripLedgerTxn.setAutoStopScheduled(true);
+            customerTripLedgerRepository.save(tripLedgerTxn);
+            
+            // Schedule auto-stop check 5 seconds before expected completion
+            LocalDateTime checkTime = tripLedgerTxn.getStartTime()
+                    .plusSeconds(expectedDuration - 5);
+            pumpAutoStopService.scheduleAutoStopCheck(tripLedgerTxn.getId(), checkTime);
+            
+            logger.info("Trip {} scheduled for auto-stop in {} seconds ({})", 
+                tripLedgerTxn.getId(), expectedDuration, flowRate.getCalculationSource());
+        }
+        
         purchaseTransactionDTO.setPurchaseId(tripLedgerTxn.getId());
 
         unpaidCustomerTrips.add(tripLedgerTxn);
@@ -262,6 +304,48 @@ public class WaterTransactionService {
                 .orElse(null);
     }
 
+    /**
+     * Single source of truth for trip completion.
+     * Used by: manual stop, auto-stop, admin actions
+     */
+    @Transactional
+    public CustomerTripLedger completeTrip(
+        CustomerTripLedger trip, 
+        boolean isAutoStopped, 
+        String stoppedBy
+    ) {
+        // Validation
+        if (trip.getStatus() != TripStatus.FILLING) {
+            throw new IllegalStateException(
+                "Cannot complete trip in status: " + trip.getStatus()
+            );
+        }
+        
+        // Common completion logic
+        trip.setEndTime(LocalDateTime.now());
+        trip.setStatus(TripStatus.COMPLETED);
+        trip.setAutoStopped(isAutoStopped);
+        trip.setAutoStopScheduled(false);
+        
+        if (isAutoStopped) {
+            trip.setAutoStopAttemptedAt(LocalDateTime.now());
+        }
+        
+        CustomerTripLedger completed = customerTripLedgerRepository.save(trip);
+        
+        // Future hook for notifications, analytics, etc
+        // onTripCompleted(completed, isAutoStopped, stoppedBy);
+        // Cancel scheduled auto-stop if manually stopped
+        if(!isAutoStopped) {
+            pumpAutoStopService.cancelScheduledCheck(trip.getId());
+        }
+        return completed;
+    }
+
+    /**
+     * Refactored updateTripTime - reuses common logic
+     * Now idempotent - safe for concurrent calls
+     */
     public List<CustomerTripLedger> updateTripTime(Integer customerId, Integer tripId) {
         CustomerTripLedger ledger = customerTripLedgerRepository.findById(tripId)
                 .orElseThrow(() -> new IllegalArgumentException("Trip not found"));
@@ -270,15 +354,27 @@ public class WaterTransactionService {
             throw new IllegalArgumentException("Trip does not belong to the specified customer");
         }
 
+        // Idempotent: if already completed, just return
+        if (ledger.getStatus() == TripStatus.COMPLETED) {
+            logger.info("Trip {} already completed", tripId);
+            return customerTripLedgerRepository.findLatestTransactionsAfterZeroBalance(customerId);
+        }
+
         if (ledger.getStatus() != TripStatus.FILLING) {
             throw new IllegalStateException("Trip is not in FILLING status");
         }
 
-        ledger.setEndTime(LocalDateTime.now());
-        ledger.setStatus(TripStatus.COMPLETED);
-        customerTripLedgerRepository.save(ledger);
+        // Reuse common completion logic
+        completeTrip(ledger, false, getCurrentUsername());
+        
+        logger.info("Manually stopped trip {} for customer {}", tripId, customerId);
+        
         return customerTripLedgerRepository.findLatestTransactionsAfterZeroBalance(customerId);
+    }
 
+    private String getCurrentUsername() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null ? auth.getName() : "system";
     }
 
     private TripStateDto mapToTripDTO(CustomerTripLedger ledger) {
@@ -288,6 +384,7 @@ public class WaterTransactionService {
         dto.setTripStatus(ledger.getStatus());
         dto.setTripStartTime(ledger.getStartTime());
         dto.setPumpUsed(ledger.getPumpUsed());
+        dto.setExpectedDurationSeconds(ledger.getExpectedDurationSec());
         return dto;
     }
 
@@ -357,5 +454,135 @@ public class WaterTransactionService {
         }).collect(Collectors.toList());
 
         return dtos;
+    }
+
+    /**
+     * Get estimated time for a customer and pump type
+     * Calculates: capacity * flowRate.secPerLiter
+     * Logs calculationSource and sampleSize on server (not returned to client)
+     */
+    public EstimatedTimeResponse getEstimatedTime(Integer customerId, String pumpUsed) {
+        Optional<WaterPurchaseParty> partyOpt = getPartyContract(customerId);
+        
+        if (partyOpt.isEmpty()) {
+            logger.warn("No party contract found for customer {}", customerId);
+            return new EstimatedTimeResponse(0);
+        }
+        
+        WaterPurchaseParty party = partyOpt.get();
+        PumpUsed pumpUsedEnum = PumpUsed.valueOf(pumpUsed.toUpperCase());
+        
+        // Get flow rate from FlowRateService (fast retrieval - never calculates)
+        FlowRateDTO flowRate = flowRateService.getFlowRateForEstimation(customerId, pumpUsedEnum);
+        
+        // Calculate estimated time: capacity * flowRate.secPerLiter
+        int estimatedTimeSeconds = BigDecimal.valueOf(party.getCapacity())
+                .multiply(flowRate.getSecPerLiter())
+                .intValue();
+        
+        // Log calculationSource and sampleSize on server (not returned to client)
+        logger.info("Estimated time for customer {}: {} seconds (capacity: {}L, rate: {} sec/L, source: {}, sampleSize: {})",
+                customerId, estimatedTimeSeconds, party.getCapacity(), 
+                flowRate.getSecPerLiter(), flowRate.getCalculationSource(), flowRate.getSampleSize());
+        
+        return new EstimatedTimeResponse(estimatedTimeSeconds);
+    }
+
+    /**
+     * Event listener for auto-stop events.
+     * Handles trip completion when auto-stop is triggered.
+     * This breaks the circular dependency with PumpAutoStopService.
+     */
+    @EventListener
+    @Transactional
+    public void handleTripAutoStopEvent(TripAutoStopEvent event) {
+        CustomerTripLedger tripFromEvent = event.getTrip();
+        try {
+            // Refresh trip from database to ensure we have latest state
+            CustomerTripLedger trip = customerTripLedgerRepository.findById(tripFromEvent.getId())
+                    .orElseThrow(() -> new IllegalArgumentException("Trip not found: " + tripFromEvent.getId()));
+            
+            // Complete the trip using common completion logic
+            completeTrip(trip, true, "AUTO_STOP");
+            
+            logger.info("Successfully completed trip {} via auto-stop event", trip.getId());
+        } catch (Exception e) {
+            logger.error("Failed to complete trip {} from auto-stop event: {}", 
+                    tripFromEvent.getId(), e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Update trip amount for an active trip.
+     * Only trips in FILLING status can be updated.
+     */
+    @Transactional
+    public WaterPurchaseTransactionDTO updateTripAmount(Integer customerId, Integer tripId, Integer newAmount, String username) {
+      
+        // Get all unpaid trips after zero balance (already sorted DESC by tripDateTime)
+        List<CustomerTripLedger> unpaidTrips = customerTripLedgerRepository
+                .findLatestTransactionsAfterZeroBalance(customerId);
+
+        // Find the trip to update in the list
+        Optional<CustomerTripLedger> tripToUpdateOpt = unpaidTrips.stream()
+                .filter(t -> t.getId() == tripId)
+                .findFirst();
+
+        if (tripToUpdateOpt.isEmpty()) {
+            throw new IllegalArgumentException("Trip not found in unpaid trips list");
+        }
+        
+        CustomerTripLedger tripToUpdate = tripToUpdateOpt.get();
+        if (tripToUpdate.getCustId() != customerId.intValue()) {
+            throw new IllegalArgumentException("Trip does not belong to the specified customer");
+        }
+
+        // Validate trip is in FILLING status
+        if (tripToUpdate.getStatus() != TripStatus.FILLING) {
+            throw new IllegalStateException("Cannot update trip amount. Trip is not in FILLING status. Current status: " + tripToUpdate.getStatus());
+        }
+        
+        // Find index of this trip in the DESC sorted list
+        int tripIndex = -1;
+        for (int i = 0; i < unpaidTrips.size(); i++) {
+            if (unpaidTrips.get(i).getId() == tripId) {
+                tripIndex = i;
+                break;
+            }
+        }
+
+        // Get balance from the trip before this one (at index + 1 in DESC order)
+        BigDecimal previousBalance = BigDecimal.ZERO;
+        if (tripIndex + 1 < unpaidTrips.size()) {
+            previousBalance = unpaidTrips.get(tripIndex + 1).getBalanceAmount();
+        }
+
+        // Update trip's creditAmount
+        BigDecimal oldAmount = tripToUpdate.getCreditAmount();
+        BigDecimal newAmountBigDecimal = BigDecimal.valueOf(newAmount);
+        tripToUpdate.setCreditAmount(newAmountBigDecimal);
+        
+        // Set balanceAmount = previous balance + new amount
+        tripToUpdate.setBalanceAmount(previousBalance.add(newAmountBigDecimal));
+        
+        // Save the trip
+        customerTripLedgerRepository.save(tripToUpdate);
+
+        // Refresh the list to get updated values
+        unpaidTrips = customerTripLedgerRepository.findLatestTransactionsAfterZeroBalance(customerId);
+
+        // Build and return response
+        WaterPurchaseTransactionDTO response = new WaterPurchaseTransactionDTO();
+        response.setPurchaseId(tripId);
+        response.setRcCreditReqList(unpaidTrips);
+        response.setBalanceAmount(unpaidTrips.size() > 0 
+                ? unpaidTrips.get(0).getBalanceAmount() 
+                : BigDecimal.ZERO);
+
+        logger.info("Updated trip {} amount from {} to {} for customer {}", 
+                tripId, oldAmount, newAmount, customerId);
+
+        return response;
     }
 }

@@ -59,4 +59,14 @@ public interface WaterPurchasePartyRepo extends JpaRepository<WaterPurchaseParty
            "ORDER BY MAX(t.tripDateTime) DESC, COUNT(t.id) DESC " +
            "LIMIT 10")
     List<WaterPurchasePartyWithNameDTO> findApprovedCustomersWithNames();
+    
+    /**
+     * Batch fetch party details by customer IDs (fix N+1 query problem)
+     */
+    List<WaterPurchaseParty> findByCustomerIdIn(List<Integer> customerIds);
+    
+    /**
+     * Find parties by capacity (for global average grouping)
+     */
+    List<WaterPurchaseParty> findByCapacity(Integer capacity);
 }

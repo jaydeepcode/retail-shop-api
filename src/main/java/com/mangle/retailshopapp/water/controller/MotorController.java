@@ -230,4 +230,43 @@ public class MotorController {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to fetch trip start time: " + e.getMessage());
         }
     }
+
+    /**
+     * Internal method for backend services to stop pump
+     * Bypasses API authentication - use with caution
+     */
+    public void stopPumpInternal(String pump) throws Exception {
+        logger.info("Internal pump stop requested for: {}", pump);
+        
+        if (mockEnabled) {
+            if ("inside".equals(pump)) {
+                pumpInsideStatus = "OFF";
+                logger.info("Mock: Stopped inside pump");
+            } else if ("outside".equals(pump)) {
+                pumpOutsideStatus = "OFF";
+                logger.info("Mock: Stopped outside pump");
+            }
+            return;
+        }
+        
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", apiKey);
+        
+        String url = String.format("%s/pump?pump=%s&action=stop", espWebApi, pump);
+        HttpEntity<String> entity = new HttpEntity<>(headers);
+        
+        try {
+            ResponseEntity<Object> response = restTemplate.exchange(
+                url, HttpMethod.POST, entity, Object.class);
+            
+            if (response.getStatusCode() == HttpStatus.OK) {
+                logger.info("Successfully stopped pump {} via internal method", pump);
+            } else {
+                throw new Exception("Pump stop returned status: " + response.getStatusCode());
+            }
+        } catch (HttpClientErrorException e) {
+            logger.error("Failed to stop pump {}: {}", pump, e.getMessage());
+            throw new Exception("Pump stop failed: " + e.getMessage());
+        }
+    }
 }
