@@ -201,6 +201,12 @@ public class WaterTransactionService {
         return (capacity + 499) / 500;
     }
 
+    /**
+     * Writes a deposit ledger row, a payment header, its detail line and - for UPI - a credit
+     * acknowledgement row. Those were four separate transactions until now, so a failure part way
+     * through left the customer's balance and the payment record disagreeing with each other.
+     */
+    @Transactional
     public WaterPurchaseTransactionDTO persistPayment(Integer customerId, CustomerPayment customerPayment,
             String username) {
         // ***** Next two lines performs payment and clears trips */
@@ -346,6 +352,7 @@ public class WaterTransactionService {
      * Refactored updateTripTime - reuses common logic
      * Now idempotent - safe for concurrent calls
      */
+    @Transactional
     public List<CustomerTripLedger> updateTripTime(Integer customerId, Integer tripId) {
         CustomerTripLedger ledger = customerTripLedgerRepository.findById(tripId)
                 .orElseThrow(() -> new IllegalArgumentException("Trip not found"));
@@ -365,6 +372,8 @@ public class WaterTransactionService {
         }
 
         // Reuse common completion logic
+        // Self-invocation: this bypasses the Spring proxy, so completeTrip's own @Transactional
+        // does not apply here. The @Transactional on this method is what makes it transactional.
         completeTrip(ledger, false, getCurrentUsername());
         
         logger.info("Manually stopped trip {} for customer {}", tripId, customerId);
