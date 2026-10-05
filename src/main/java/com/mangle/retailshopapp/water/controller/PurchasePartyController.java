@@ -1,0 +1,193 @@
+package com.mangle.retailshopapp.water.controller;
+
+import java.math.BigDecimal;
+import java.security.Principal;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import com.mangle.retailshopapp.customer.model.CustomerRegisterDto;
+import com.mangle.retailshopapp.customer.model.CustomerTripLedger;
+import com.mangle.retailshopapp.customer.repo.CustomerTripLedgerRepository;
+import com.mangle.retailshopapp.customer.service.CustomerRegistrationService;
+import com.mangle.retailshopapp.water.model.CustomerPayment;
+import com.mangle.retailshopapp.water.model.CustomerPendingTripsDTO;
+import com.mangle.retailshopapp.water.model.CustomerWithCreditPointsDTO;
+import com.mangle.retailshopapp.water.model.TripStateDto;
+import com.mangle.retailshopapp.water.model.WaterPurchaseParty;
+import com.mangle.retailshopapp.water.model.WaterPurchaseTransactionDTO;
+import com.mangle.retailshopapp.water.model.CreditBalanceDTO;
+import com.mangle.retailshopapp.water.model.FlowRateDTO;
+import com.mangle.retailshopapp.water.model.EstimatedTimeResponse;
+import com.mangle.retailshopapp.water.model.PumpUsed;
+import com.mangle.retailshopapp.water.service.FlowRateService;
+import com.mangle.retailshopapp.water.service.WaterTransactionService;
+
+@RestController
+@RequestMapping("party")
+public class PurchasePartyController {
+
+    @Autowired
+    private WaterTransactionService service;
+
+    @Autowired
+    private FlowRateService flowRateService;
+
+    @Autowired
+    private CustomerRegistrationService customerRegistrationService;
+    
+    @Autowired
+    private CustomerTripLedgerRepository customerTripLedgerRepository;
+
+    @GetMapping("/transactions")
+    public WaterPurchaseTransactionDTO searchCustomers(@RequestParam Integer customerId) {
+        return service.getCustomerTransactions(customerId);
+    }
+
+    @GetMapping("/recent-customers")
+    public List<CustomerPendingTripsDTO> getRecentCustomersWithPendingTrips() {
+        return service.getRecentCustomersWithPendingTrips();
+    }
+
+    @GetMapping("/details/{customerId}")
+    public WaterPurchaseParty getCustomerDetails(@PathVariable Integer customerId) {
+        Optional<WaterPurchaseParty> contract = service.getPartyContract(customerId);
+        if (contract.isPresent()) {
+            return contract.get();
+        }
+        return null;
+    }
+
+    @GetMapping("/in-progress-trip/{customerId}")
+    public ResponseEntity<TripStateDto> getInProgressTrip(@PathVariable Long customerId) {
+        return ResponseEntity.ok(service.getInProgressTrip(customerId));
+    }
+
+    @PostMapping("/record-trip")
+    public ResponseEntity<WaterPurchaseTransactionDTO> recordTrip(
+            @RequestParam Integer customerId,
+            @RequestParam Integer tripAmount,
+            @RequestParam String pumpUsed,
+            Principal principal) {
+        return ResponseEntity.ok(service.generateAndSaveTrip(customerId, tripAmount, pumpUsed, principal.getName()));
+    }
+
+    @PutMapping("/update-trip-time")
+    public ResponseEntity<List<CustomerTripLedger>> updateTripTime(
+            @RequestParam Integer customerId,
+            @RequestParam Integer tripId) {
+        return ResponseEntity.ok(service.updateTripTime(customerId, tripId));
+    }
+
+    @PutMapping("/update-trip-amount")
+    public ResponseEntity<WaterPurchaseTransactionDTO> updateTripAmount(
+            @RequestParam Integer customerId,
+            @RequestParam Integer tripId,
+            @RequestParam Integer amount,
+            Principal principal) {
+        return ResponseEntity.ok(service.updateTripAmount(customerId, tripId, amount, principal.getName()));
+    }
+
+    @PostMapping("/deposit-amount")
+    public WaterPurchaseTransactionDTO depositTransaction(@RequestParam Integer customerId,
+            @RequestBody CustomerPayment custPayment, Principal principal) {
+        return service.persistPayment(customerId, custPayment, principal.getName());
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<?> registerCustomer(@RequestBody CustomerRegisterDto customerRegisterDto) {
+        try {
+            customerRegistrationService.registerCustomer(customerRegisterDto);
+            return ResponseEntity.ok(Collections.singletonMap("message", "Registration Successful"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Collections.singletonMap("message", "Registration Failed: " + e.getMessage()));
+        }
+    }
+
+    @PutMapping("/update/{custId}")
+    public ResponseEntity<?> updateRegisteredCustomer(@PathVariable String custId,
+            @RequestBody CustomerRegisterDto customerRegisterDto) {
+        try {
+            customerRegistrationService.updateCustomer(customerRegisterDto, custId);
+            return ResponseEntity.ok(Collections.singletonMap("message", "Registration Successful"));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Collections.singletonMap("message", "Update Failed: " + e.getMessage()));
+        }
+    }
+
+    @GetMapping("/check-contact/{contactNum}")
+    public ResponseEntity<Boolean> checkContact(@PathVariable String contactNum) {
+        boolean isRegistered = customerRegistrationService.isContactRegistered(contactNum);
+        return ResponseEntity.ok(isRegistered);
+    }
+
+    @GetMapping("/trip-amount/{custId}")
+    public ResponseEntity<BigDecimal> caclculateTripAmount(@PathVariable String custId) {
+        BigDecimal tripAmount = service.getCalculatedAmount(custId);
+        return ResponseEntity.ok(tripAmount);
+    }
+
+    @GetMapping("/all-transactions")
+    public Page<CustomerTripLedger> getTransactions(@RequestParam int custId, @RequestParam int page,
+            @RequestParam int size) {
+        Sort.Direction direction = Sort.Direction.DESC;
+        return service.getPaginatedTransactions(custId, PageRequest.of(page, size, Sort.by(direction, "tripDateTime")));
+    }    
+
+    @GetMapping("/check-filling-status")
+    public ResponseEntity<Integer> checkAnyTripInFillingStatus() {
+        Optional<Integer> fillingCustomerId = customerTripLedgerRepository.findCustomerWithInProgressTrip();
+        return fillingCustomerId
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    @GetMapping("/credit-balance/{customerId}")
+    public ResponseEntity<CreditBalanceDTO> getCreditBalance(@PathVariable Integer customerId) {
+        return ResponseEntity.ok(service.getCreditBalance(customerId));
+    }
+
+    @GetMapping("/pending-trips/{customerId}")
+    public ResponseEntity<List<TripStateDto>> getPendingTrips(@PathVariable Integer customerId) {
+        return ResponseEntity.ok(service.getPendingTrips(customerId));
+    }
+
+    @GetMapping("/customers-with-credit-points")
+    public ResponseEntity<List<CustomerWithCreditPointsDTO>> getCustomersWithCreditPoints() {
+        return ResponseEntity.ok(service.getTopCustomersWithCreditPoints());
+    }
+
+    @GetMapping("/flow-rate/{customerId}")
+    public ResponseEntity<FlowRateDTO> getFlowRate(
+        @PathVariable Integer customerId,
+        @RequestParam(required = false) String pumpUsed) {
+        
+        PumpUsed pump = pumpUsed != null 
+            ? PumpUsed.valueOf(pumpUsed.toUpperCase()) 
+            : PumpUsed.BOTH;
+        
+        FlowRateDTO flowRate = flowRateService.getFlowRate(customerId, pump);
+        
+        return ResponseEntity.ok(flowRate);
+    }
+
+    @GetMapping("/estimated-time")
+    public ResponseEntity<EstimatedTimeResponse> getEstimatedTime(
+        @RequestParam Integer customerId,
+        @RequestParam String pumpUsed) {
+        
+        EstimatedTimeResponse response = service.getEstimatedTime(customerId, pumpUsed);
+        return ResponseEntity.ok(response);
+    }
+
+}
