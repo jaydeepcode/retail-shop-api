@@ -3,10 +3,6 @@
 -- ============================================================================
 -- Spec: design-ledger.md §4, §4.1, §4.2; log §8.2, §8.3, §8.4. §8.1's V24 row.
 --
--- ⚠ LIKE V23, THIS FILE CREATES A TRIGGER, so it needs the same privilege:
--- log_bin_trust_function_creators = 1, or SUPER on the migrating account.
--- V23's header has the measurements and the remedy.
---
 -- SAFE ALONGSIDE THE LEGACY WRITER: one new table, plus one FK added to V24's
 -- acc_float_movement, which is new and empty.
 --
@@ -112,46 +108,26 @@ SET @sql = IF(
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ============================================================================
--- 3. The immutability trigger (§4.1)
+-- 3. Rate immutability is a service rule, not a trigger
 -- ============================================================================
--- "Editing" a rate means closing the open row and inserting a successor. This is
--- mechanism 1 of two; mechanism 2 is the one that actually guarantees FRD §7.2's
--- "historical P&L never shifts under the user when a rate is corrected" — the
+-- §4.1 specifies a BEFORE UPDATE trigger refusing any change to the identifying
+-- columns or the rate, refusing a second EFFECTIVE_TO, and refusing a close
+-- dated in the past. Moved into the service on 2026-10-09: every one of those is
+-- ACCOUNTING POLICY -- "close the row and insert a successor" -- and policy reads
+-- far better as a 422 with a sentence than as SIGNAL SQLSTATE '45000'. It lives
+-- in LedgerCorrectionRules.assertRateClosable.
+--
+-- ⚠ AND §4.1 IS EXPLICIT THAT THIS TRIGGER WAS NEVER THE REAL GUARANTEE ANYWAY.
+-- It lists two mechanisms and says the second is the one that matters: "the
 -- POSTED AMOUNT is the record, not the rate. Historical P&L is a SUM over
--- acc_voucher_line, whose rows V23 trigger 3 makes immutable, so even a
--- successful attack on this table cannot move a reported figure.
+-- acc_voucher_line, whose rows are immutable. Even a successful attack on the
+-- rate table cannot move a reported figure." The rate table is an INPUT LOG for
+-- future postings. So losing trigger-level enforcement here costs much less than
+-- it would on the voucher tables, which is why this one was an easy move.
 --
--- Stating that plainly matters: this table is an INPUT LOG for future postings.
--- It is not, and must never become, the source of a reported figure.
---
--- ROUTE_CODE is in the immutable column list per log §8.3's closing line.
+-- Nothing writes this table in S2 except the seeds below; the rate-admin screen
+-- is later work and is what will call the guard.
 DROP TRIGGER IF EXISTS trg_acc_commission_rate_bu;
-
-DELIMITER $$
-
-CREATE TRIGGER trg_acc_commission_rate_bu BEFORE UPDATE ON acc_commission_rate
-FOR EACH ROW
-BEGIN
-    IF  NEW.OPERATOR_CODE  <> OLD.OPERATOR_CODE
-     OR NEW.ROUTE_CODE     <> OLD.ROUTE_CODE
-     OR NEW.PLAN_TIER      <> OLD.PLAN_TIER
-     OR NEW.MIN_AMOUNT     <> OLD.MIN_AMOUNT
-     OR NOT (NEW.MAX_AMOUNT <=> OLD.MAX_AMOUNT)
-     OR NEW.RATE_PCT       <> OLD.RATE_PCT
-     OR NEW.EFFECTIVE_FROM <> OLD.EFFECTIVE_FROM THEN
-        SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'a commission rate is immutable; close it and insert a successor';
-    END IF;
-    IF OLD.EFFECTIVE_TO IS NOT NULL AND NOT (NEW.EFFECTIVE_TO <=> OLD.EFFECTIVE_TO) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'EFFECTIVE_TO is already set and cannot be changed';
-    END IF;
-    IF NEW.EFFECTIVE_TO IS NOT NULL AND NEW.EFFECTIVE_TO < CURDATE() THEN
-        SIGNAL SQLSTATE '45000'
-            SET MESSAGE_TEXT = 'a rate cannot be closed in the past; that would rewrite settled history';
-    END IF;
-END$$
-
-DELIMITER ;
 
 -- ============================================================================
 -- 4. The rate seeds (§4, log §8.4)

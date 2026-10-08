@@ -390,17 +390,32 @@ class LedgerMigrationTest {
 
     @Test
     @Order(9)
-    @DisplayName("all seven triggers were created, so Flyway handled DELIMITER")
+    @DisplayName("exactly three triggers exist, and the four that moved out are gone")
     void triggersExist() {
-        // V23 is the first DELIMITER-based migration in this repo's history. If
-        // Flyway's MySQL parser had mishandled it, these would be absent or
-        // truncated — which is exactly why §8.1 put them in their own file, so
-        // the failure could not take out V22's table DDL.
-        assertEquals(List.of("trg_acc_commission_rate_bu", "trg_acc_float_movement_bu",
-                        "trg_acc_voucher_bd", "trg_acc_voucher_bu", "trg_acc_voucher_line_bd",
-                        "trg_acc_voucher_line_bi", "trg_acc_voucher_line_bu"),
+        // Reduced from seven on 2026-10-09. "A posted money row is never
+        // updated" is a storage property and a per-table GRANT serves it better
+        // than a trigger; "an account reconciled past this date needs a journal"
+        // and "a rate is closed, never edited" are accounting policy and belong
+        // in the service, where they return a sentence. V23's header has the
+        // full reasoning. These three are the only enforcement of the CROSS-ROW
+        // balance invariant, which no grant can express.
+        assertEquals(List.of("trg_acc_voucher_bd", "trg_acc_voucher_bu",
+                        "trg_acc_voucher_line_bi"),
                 strings("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS "
                         + "WHERE TRIGGER_SCHEMA = DATABASE() ORDER BY TRIGGER_NAME"));
+
+        // V23 is now the ONLY migration creating a trigger, so it is the only
+        // one needing log_bin_trust_function_creators. V20's and V27's DELIMITER
+        // blocks create PROCEDUREs, which that variable does not govern.
+        //
+        // Asserting the four are ABSENT is not pedantry: a database that ran an
+        // earlier build of V23/V24/V25 would still carry them, and the rule
+        // would then be enforced twice with the service's readable error never
+        // surfacing. V27 fails on this too, under STALETRIGGER.
+        assertEquals(0, count("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TRIGGERS "
+                + "WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME IN "
+                + "('trg_acc_voucher_line_bu','trg_acc_voucher_line_bd',"
+                + "'trg_acc_float_movement_bu','trg_acc_commission_rate_bu')"));
     }
 
     // ------------------------------------------------------------------
@@ -463,9 +478,11 @@ class LedgerMigrationTest {
                     "a sealed voucher cannot be un-sealed");
             refused(s, leg(100, 3, "CASH_SAFE", "DR_AMOUNT", "1.00"),
                     "a leg cannot be added to a sealed voucher, or trigger 1 could be defeated");
-            refused(s, "UPDATE acc_voucher_line SET DR_AMOUNT = 999.00 "
-                            + "WHERE VOUCHER_ID = 100 AND LINE_NO = 1",
-                    "acc_voucher_line is append-only, unconditionally");
+
+            // ⚠ NOT asserted here any more: that UPDATE on acc_voucher_line is
+            // refused. That is now a GRANT, and this connection is the
+            // migrating account, which holds UPDATE. grantsGiveAppendOnly
+            // proves the mechanism with a properly restricted account.
         } catch (SQLException e) {
             throw new AssertionError("probe setup failed", e);
         }
@@ -496,23 +513,37 @@ class LedgerMigrationTest {
 
     @Test
     @Order(14)
-    @DisplayName("trigger 4 locks a line once its account is reconciled")
-    void reconciliationLockFires() {
-        // This is FRD §8.3's correction regime in one assertion: before the
-        // reconciliation point a voucher can be deleted and re-posted, and after
-        // it the only route is a correcting JOURNAL.
+    @DisplayName("acc_reconciliation records the variance; the delete lock is now a service rule")
+    void reconciliationRowsAndTheMovedLock() {
         try (Connection c = connect(); Statement s = c.createStatement()) {
             s.execute("DELETE FROM acc_voucher_line WHERE VOUCHER_ID = 103");
             s.execute("INSERT INTO acc_reconciliation (ACCOUNT_CODE, RECON_DATE, "
                     + "COUNTED_AMOUNT, LEDGER_AMOUNT) "
                     + "VALUES ('CASH_RECHARGE', '2026-10-08', 100.00, 100.00)");
-            refused(s, "DELETE FROM acc_voucher_line WHERE VOUCHER_ID = 100 AND LINE_NO = 1",
-                    "a reconciled account's sealed lines must stop being deletable");
 
             // VARIANCE_AMOUNT is a generated STORED column: derived by the
-            // engine, never independently writable.
+            // engine, never independently writable. No privilege needed for it.
             assertEquals("0.00", string("SELECT VARIANCE_AMOUNT FROM acc_reconciliation "
                     + "WHERE ACCOUNT_CODE = 'CASH_RECHARGE'"));
+            // And it really is non-writable, which is what makes it evidence
+            // rather than a second stored balance.
+            refused(s, "UPDATE acc_reconciliation SET VARIANCE_AMOUNT = 5.00 "
+                            + "WHERE ACCOUNT_CODE = 'CASH_RECHARGE'",
+                    "a generated column cannot be assigned");
+
+            // ⚠ THE DATABASE NO LONGER REFUSES THIS. trg_acc_voucher_line_bd
+            // was removed on 2026-10-09 because FRD §8.3's correction regime is
+            // accounting policy, not a storage property. The rule now lives in
+            // LedgerCorrectionRules.assertVoucherDeletable and is covered by
+            // LedgerCorrectionRulesTest.
+            //
+            // Asserting the DB permits it is deliberate, not an oversight: it
+            // records exactly what the layering decision gave up, so a future
+            // reader can see the cost rather than assume the rule is enforced
+            // in two places.
+            s.execute("DELETE FROM acc_voucher_line WHERE VOUCHER_ID = 100 AND LINE_NO = 1");
+            assertEquals(1, count("SELECT COUNT(*) FROM acc_voucher_line WHERE VOUCHER_ID = 100"),
+                    "the DB allows it; only the service refuses it now");
         } catch (SQLException e) {
             throw new AssertionError("probe setup failed", e);
         }
@@ -533,40 +564,40 @@ class LedgerMigrationTest {
 
     @Test
     @Order(16)
-    @DisplayName("V24's and V25's triggers fire too")
-    void floatAndRateTriggersFire() {
+    @DisplayName("V24's and V25's CHECKs bite; their triggers are gone by design")
+    void floatAndRateConstraintsBite() {
         try (Connection c = connect(); Statement s = c.createStatement()) {
             s.execute("INSERT INTO acc_float_movement (ACCOUNT_CODE, MOVEMENT_TYPE, FACE_DELTA, "
                     + "COST_DELTA, VOUCHER_ID, MOVED_AT) "
                     + "VALUES ('FLOAT_ARTL', 'SALE', -199.00, -193.03, 100, NOW())");
-            refused(s, "UPDATE acc_float_movement SET FACE_DELTA = -1.00 WHERE MOVEMENT_ID = 1",
-                    "the running weighted average is a SUM over these rows, so a mutable "
-                            + "row would restate the cost basis of every sale after it");
             refused(s, "INSERT INTO acc_float_movement (ACCOUNT_CODE, MOVEMENT_TYPE, FACE_DELTA, "
                             + "COST_DELTA, VOUCHER_ID, MOVED_AT) "
                             + "VALUES ('FLOAT_ARTL', 'TOPUP', 2000.00, 2000.00, 100, NOW())",
                     "ck_fmov_topup: a TOPUP without its batch has no cost basis");
-
-            // A rate is closed and superseded, never edited (§4.1 mechanism 1).
-            refused(s, "UPDATE acc_commission_rate SET RATE_PCT = 9.9 "
+            refused(s, "INSERT INTO acc_float_movement (ACCOUNT_CODE, MOVEMENT_TYPE, FACE_DELTA, "
+                            + "COST_DELTA, VOUCHER_ID, MOVED_AT) "
+                            + "VALUES ('FLOAT_ARTL', 'SALE', 0.00, 0.00, 100, NOW())",
+                    "ck_fmov_nonzero: a movement that moves nothing is not a movement");
+            refused(s, "UPDATE acc_commission_rate SET RATE_PCT = 150 "
                             + "WHERE OPERATOR_CODE = 'ARTL' AND ROUTE_CODE = 'DIRECT'",
-                    "RATE_PCT is immutable");
-            refused(s, "UPDATE acc_commission_rate SET ROUTE_CODE = 'DIRECT' "
-                            + "WHERE OPERATOR_CODE = 'BSNL'",
-                    "ROUTE_CODE is immutable (log §8.3 added it to the list)");
-            refused(s, "UPDATE acc_commission_rate SET EFFECTIVE_TO = '2020-01-01' "
-                            + "WHERE OPERATOR_CODE = 'ARTL' AND ROUTE_CODE = 'DIRECT'",
-                    "closing a rate in the past would rewrite settled history");
+                    "ck_rate_pct still bounds the rate, with no trigger involved");
 
-            // Closing one today is the legitimate move, and it may only happen once.
+            // ⚠ The append-only trigger on acc_float_movement and the rate
+            // immutability trigger are BOTH gone (2026-10-09). The first is a
+            // grant, the second a service rule. So the migrating account can do
+            // this, and that is the documented trade:
+            s.execute("UPDATE acc_float_movement SET NOTE = 'reachable without the grant' "
+                    + "WHERE MOVEMENT_ID = 1");
+            s.execute("UPDATE acc_commission_rate SET RATE_PCT = 2.750000 "
+                    + "WHERE OPERATOR_CODE = 'ARTL' AND ROUTE_CODE = 'DIRECT'");
+
+            // Closing a rate is now permitted by the database too — it is the
+            // service that decides whether a close is legitimate. Closing
+            // BIGTV's only row leaves an active operator with no open rate,
+            // which is precisely the hole V27's RATE-A check exists to find;
+            // gateZeroHasTeeth reads it back.
             s.execute("UPDATE acc_commission_rate SET EFFECTIVE_TO = CURDATE() "
                     + "WHERE OPERATOR_CODE = 'BIGTV'");
-            refused(s, "UPDATE acc_commission_rate SET EFFECTIVE_TO = '2026-12-31' "
-                            + "WHERE OPERATOR_CODE = 'BIGTV'",
-                    "EFFECTIVE_TO is already set and cannot be changed");
-            refused(s, "UPDATE acc_commission_rate SET EFFECTIVE_TO = NULL "
-                            + "WHERE OPERATOR_CODE = 'BIGTV'",
-                    "a closed rate cannot be re-opened");
         } catch (SQLException e) {
             throw new AssertionError("probe setup failed", e);
         }
@@ -591,6 +622,75 @@ class LedgerMigrationTest {
             s.execute("DELETE FROM acc_account WHERE ACCOUNT_CODE = 'FLOAT_PROBE'");
         } catch (SQLException e) {
             throw new AssertionError("probe setup failed", e);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The two triggers that became GRANTs
+    // ------------------------------------------------------------------
+
+    @Test
+    @Order(19)
+    @DisplayName("per-table grants give append-only with no trigger and no SUPER")
+    void grantsGiveAppendOnly() {
+        // This is the mechanism that replaced trg_acc_voucher_line_bu and
+        // trg_acc_float_movement_bu. It needs a properly restricted account to
+        // mean anything, so the test builds one — the migrating account holds
+        // UPDATE and would pass trivially.
+        //
+        // ⚠ The grant must be issued PER TABLE. Granting at database level and
+        // then revoking on one table fails with ERROR 1147 ("no such grant
+        // defined"), because MySQL cannot revoke below the level it granted.
+        // That is the single most likely way to deploy this wrongly.
+        try (Connection root = DriverManager.getConnection(
+                     MYSQL.getJdbcUrl(), "root", MYSQL.getPassword());
+             Statement rs = root.createStatement()) {
+
+            rs.execute("DROP USER IF EXISTS 'ledger_app'@'%'");
+            rs.execute("CREATE USER 'ledger_app'@'%' IDENTIFIED BY 'lp'");
+            rs.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON recharge.acc_voucher "
+                    + "TO 'ledger_app'@'%'");
+            // UPDATE deliberately absent on both append-only tables.
+            rs.execute("GRANT SELECT, INSERT, DELETE ON recharge.acc_voucher_line "
+                    + "TO 'ledger_app'@'%'");
+            rs.execute("GRANT SELECT, INSERT, DELETE ON recharge.acc_float_movement "
+                    + "TO 'ledger_app'@'%'");
+            rs.execute("GRANT SELECT ON recharge.acc_account TO 'ledger_app'@'%'");
+            rs.execute("FLUSH PRIVILEGES");
+
+            try (Connection app = DriverManager.getConnection(
+                         MYSQL.getJdbcUrl(), "ledger_app", "lp");
+                 Statement as = app.createStatement()) {
+
+                // An unsealed voucher to hang legs off.
+                as.execute(voucher(900, "JOURNAL", "MANUAL", "grant probe"));
+                as.execute(leg(900, 1, "CASH_RECHARGE", "DR_AMOUNT", "7.00"));
+                as.execute(leg(900, 2, "INC_RCHG_COMM", "CR_AMOUNT", "7.00"));
+
+                // The property we are buying: no UPDATE, by any statement.
+                refused(as, "UPDATE acc_voucher_line SET DR_AMOUNT = 999.00 "
+                                + "WHERE VOUCHER_ID = 900 AND LINE_NO = 1",
+                        "the grant must make acc_voucher_line append-only");
+                refused(as, "UPDATE acc_float_movement SET NOTE = 'x' WHERE MOVEMENT_ID = 1",
+                        "the grant must make acc_float_movement append-only");
+
+                // And the three things the posting path still needs must work,
+                // or the grant would be unusable. Order matters: the leg
+                // delete-and-re-add has to happen while the voucher is still
+                // UNSEALED, because trigger 2 refuses a leg on a sealed one —
+                // which is exactly the behaviour balancedVoucherSeals relies on.
+                as.execute("DELETE FROM acc_voucher_line WHERE VOUCHER_ID = 900 AND LINE_NO = 2");
+                as.execute("INSERT INTO acc_voucher_line (VOUCHER_ID, LINE_NO, ACCOUNT_CODE, "
+                        + "CR_AMOUNT) VALUES (900, 3, 'INC_RCHG_COMM', 7.00)");
+                as.execute("UPDATE acc_voucher SET SEALED_AT = NOW() WHERE VOUCHER_ID = 900");
+                assertEquals("1", string("SELECT COUNT(*) FROM acc_voucher "
+                                + "WHERE VOUCHER_ID = 900 AND SEALED_AT IS NOT NULL"),
+                        "sealing is an UPDATE on the header and must still be permitted");
+            }
+
+            rs.execute("DROP USER 'ledger_app'@'%'");
+        } catch (SQLException e) {
+            throw new AssertionError("grant probe failed", e);
         }
     }
 

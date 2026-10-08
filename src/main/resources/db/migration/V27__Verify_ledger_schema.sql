@@ -165,26 +165,38 @@ SET @missing = (
 SET @failures = IF(@missing IS NULL, @failures, CONCAT(@failures, ' |CHECK:', @missing));
 
 -- ============================================================================
--- 5. All seven triggers
+-- 5. The three remaining triggers
 -- ============================================================================
--- Five from §2.4 (V23), one from §3.2 (V24), one from §4.1 (V25). This is the
--- assertion that proves Flyway's parser handled DELIMITER — if it had not, these
--- would be absent or truncated.
+-- Reduced from seven on 2026-10-09. The four that went:
+--   lines append-only, movements append-only  -> per-table GRANTs
+--   reconciliation delete lock, rate immutability -> LedgerCorrectionRules
+-- V23's header has the reasoning. These three are the only enforcement of the
+-- CROSS-ROW balance invariant, which no grant can express.
+--
+-- V23 is now the ONLY migration that creates a trigger, so it is the only one
+-- needing log_bin_trust_function_creators = 1 (or SUPER). V20's and V27's own
+-- DELIMITER blocks create PROCEDUREs, which are measurably unaffected by that
+-- variable -- verified 2026-10-09: CREATE PROCEDURE succeeds for a non-SUPER
+-- account with binary logging on, while CREATE TRIGGER fails with ERROR 1419.
 --
 -- EXISTENCE IS NOT ENOUGH, and this gate cannot do better. A trigger that exists
 -- but does not fire passes every assertion here. LedgerMigrationTest attempts
 -- the bad writes and asserts each one is refused; that is the half of the proof
 -- SQL cannot perform on itself.
+--
+-- ⚠ THE GRANTS ARE NOT ASSERTED HERE, and that is the honest cost of replacing
+-- two triggers with them. A trigger is a schema guarantee this gate can verify;
+-- a grant is environment configuration the repository cannot see, because the
+-- account name differs per environment and the migrating account may legitimately
+-- hold full privileges in development. db/migration/README.md carries the grants
+-- and a verification query for the DBA to run, and LedgerMigrationTest proves the
+-- mechanism works by building a restricted account and probing it.
 SET @missing = (
     SELECT GROUP_CONCAT(x.name ORDER BY x.name)
     FROM (
         SELECT 'trg_acc_voucher_bu' AS name
         UNION ALL SELECT 'trg_acc_voucher_line_bi'
-        UNION ALL SELECT 'trg_acc_voucher_line_bu'
-        UNION ALL SELECT 'trg_acc_voucher_line_bd'
         UNION ALL SELECT 'trg_acc_voucher_bd'
-        UNION ALL SELECT 'trg_acc_float_movement_bu'
-        UNION ALL SELECT 'trg_acc_commission_rate_bu'
     ) x
     WHERE NOT EXISTS (
         SELECT 1 FROM INFORMATION_SCHEMA.TRIGGERS
@@ -192,6 +204,24 @@ SET @missing = (
     )
 );
 SET @failures = IF(@missing IS NULL, @failures, CONCAT(@failures, ' |TRIGGER:', @missing));
+
+-- And the four that were removed must be ABSENT, so a database that ran an
+-- earlier build of V23/V24/V25 cannot sit in a half-converged state where the
+-- rule is enforced twice and the service's error message never surfaces.
+SET @missing = (
+    SELECT GROUP_CONCAT(x.name ORDER BY x.name)
+    FROM (
+        SELECT 'trg_acc_voucher_line_bu' AS name
+        UNION ALL SELECT 'trg_acc_voucher_line_bd'
+        UNION ALL SELECT 'trg_acc_float_movement_bu'
+        UNION ALL SELECT 'trg_acc_commission_rate_bu'
+    ) x
+    WHERE EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.TRIGGERS
+         WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = x.name
+    )
+);
+SET @failures = IF(@missing IS NULL, @failures, CONCAT(@failures, ' |STALETRIGGER:', @missing));
 
 -- ============================================================================
 -- 6. The column types that have already caused a defect
@@ -383,8 +413,8 @@ SET @failures = IF(@missing IS NULL, @failures, CONCAT(@failures, ' |OVERLAP:', 
 -- first — Flyway does not log that, but running this file by hand through the
 -- mysql client prints it, which is what a human debugging a failed gate does.
 -- The category prefixes are abbreviated for the same reason: TABLES, VIEW,
--- COLLATION, FK, CHECK, TRIGGER, COLTYPE, NOTEMPTY, SEEDS, POOL, RATE-A, RATE-B,
--- RATE-C, OVERLAP.
+-- COLLATION, FK, CHECK, TRIGGER, STALETRIGGER, COLTYPE, NOTEMPTY, SEEDS, POOL,
+-- RATE-A, RATE-B, RATE-C, OVERLAP.
 DROP PROCEDURE IF EXISTS v27_assert;
 
 DELIMITER $$
