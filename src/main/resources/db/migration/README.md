@@ -32,21 +32,56 @@ effect, built from the production dump's DDL. Its own header explains what it re
 and what it deliberately leaves out. See `design-domain.md` §6.2 and
 `design-crosscutting.md:596-598` (risk R2).
 
-### One-off action still outstanding on production
+### One-off `repair` needed on EVERY database that already has the original V8
 
-The reconstructed bytes do not hash to `1287378492`, so Flyway's startup validation fails
-with a checksum mismatch on version 8 until the stored checksum is rewritten once:
+Not just production — **the developer database too**, because it is a restore that already
+carries the original V8 history row. Verified against it on 2026-10-08 with the read-only
+`validate` goal:
 
 ```
-mvn flyway:repair \
+Migration checksum mismatch for migration version 8
+  -> Applied to database : 1287378492
+  -> Resolved locally    : -553486591
+Detected resolved migration not applied to database: 9, 10, 11, 12
+```
+
+Flyway runs `validate` before `migrate` by default, so until this is repaired **the
+application will not start** against such a database — the new migrations never get a chance
+to apply. Repair once per database:
+
+```sh
+mvn org.flywaydb:flyway-maven-plugin:repair \
   -Dflyway.url="jdbc:mysql://<host>:3306/recharge" \
   -Dflyway.user="<user>" \
-  -Dflyway.password="<password>"
+  -Dflyway.password="<password>" \
+  -Dflyway.locations=filesystem:src/main/resources/db/migration
 ```
 
-`repair` rewrites the checksum of the existing version-8 history row to match the file. It
-does **not** re-run the migration, and it does not touch the schema or any data. Run it once,
-before the first deployment that includes this file.
+`repair` rewrites the version-8 row's checksum to match the file. It does **not** re-run the
+migration and does **not** touch the schema or any data.
+
+Confirm it worked with the read-only goal before starting the app — swap `repair` for
+`validate`. A clean run reports only the four pending migrations.
+
+Two details of that command are deliberate. It is **fully qualified** rather than
+`mvn flyway:repair`: the plugin is declared in `pom.xml` pinned to `${flyway.version}`, the
+same Flyway the application runs, and an unpinned prefix resolves to whatever the latest
+release happens to be — a repair written by a different major version can record a checksum
+the app then rejects, turning a one-off fix into a loop. And `flyway.locations` is passed
+explicitly because the goal runs outside the Spring context, so it does not read
+`spring.flyway.locations`.
+
+### Where the migrations will actually apply
+
+`application-local.properties` points at `jdbc:mysql://localhost:3306/recharge`, and
+`application.properties` sets `spring.flyway.enabled=true`. That database is the developer
+restore — a copy of production with real data, around 73,469 `rc_txn_header` rows. So
+**starting the backend on the local profile applies V9–V12 to it.**
+
+That is the right place to exercise this slice: `implementation-plan.md:69` asks for exactly
+"a prod copy". Just know it is deliberate rather than incidental, and that V9 rebuilds four
+live tables under an exclusive lock on the way through (see V9's header), so run it when
+nothing else is using that database.
 
 ## A blank environment still cannot be built from this repo — V8 was not the whole story
 

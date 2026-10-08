@@ -145,6 +145,40 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
+			<!-- Flyway CLI goals: flyway:info, flyway:validate, flyway:repair.
+			     Declared so those commands are reproducible, because V8's
+			     reconstruction needs a one-off `flyway:repair` on every database
+			     that already has the original applied, and db/migration/README.md
+			     documents that command.
+
+			     The VERSION MATTERS. ${flyway.version} is the Boot BOM's, which is
+			     the same flyway-core the application runs, so the plugin computes
+			     checksums exactly as the app does. Left undeclared, Maven resolves
+			     the prefix to whatever the latest release happens to be, and a
+			     repair written by a different major version can record a checksum
+			     the app then rejects - turning a one-off fix into a loop.
+
+			     flyway-mysql is a required plugin dependency: Flyway 10 moved MySQL
+			     support out of core, so without it every goal fails with "no
+			     database support". The driver has to be here too; the project's own
+			     runtime dependency is not on the plugin's classpath. -->
+			<plugin>
+				<groupId>org.flywaydb</groupId>
+				<artifactId>flyway-maven-plugin</artifactId>
+				<version>${flyway.version}</version>
+				<dependencies>
+					<dependency>
+						<groupId>org.flywaydb</groupId>
+						<artifactId>flyway-mysql</artifactId>
+						<version>${flyway.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>com.mysql</groupId>
+						<artifactId>mysql-connector-j</artifactId>
+						<version>${mysql.version}</version>
+					</dependency>
+				</dependencies>
+			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
