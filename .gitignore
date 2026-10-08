@@ -43,3 +43,9 @@ docs/
 *.log
 hs_err_pid*
 replay_pid*
+
+### Local secret config — real values live here and are never tracked ###
+# config/* rather than config/: excluding the directory stops Git descending into it,
+# which would make the !config/*.example.sh negation unreachable.
+config/*
+!config/*.example.sh
