@@ -196,14 +196,28 @@ recharge.*` — so `TRIGGER` is granted, `SUPER` is not:
 `DELIMITER` to create a throwaway assertion procedure, and those are free. Only the two
 trigger-creating migrations need anything.
 
-Preferred remedy, least privilege — run once per database, as root or a DBA account:
+Preferred remedy, least privilege. **Use `SET PERSIST`, not `SET GLOBAL`** — it sets the running
+value *and* persists it, so there is no `my.cnf` edit to remember and nothing to lose on restart.
+Run once per database, as root or a DBA account:
 
-```sql
-SET GLOBAL log_bin_trust_function_creators = 1;
+```sh
+mysql -u root -p -e "SET PERSIST log_bin_trust_function_creators = 1;"
 ```
 
-Put it in `my.cnf` as well, or it is lost on restart. The alternative is `SUPER` on the migrating
-account, which is not a sensible grant for an application account just to run two migrations.
+Verified on 8.4.11: it writes the value to `mysqld-auto.cnf` in the data directory
+(`/opt/homebrew/var/mysql/` on the Homebrew install) and survives a restart. Confirm it with an
+ordinary account, which can read the variable without any privilege:
+
+```sh
+mysql -h127.0.0.1 -uCISADM -pcisadm -N -e "SELECT @@log_bin_trust_function_creators;"
+```
+
+The alternative is `SUPER` on the migrating account, which is not a sensible grant for an
+application account just to run two migrations.
+
+**⚠ The variable is deprecated in the 8.x line.** It works on both 8.0.43 and 8.4.11 — both tested
+— but expect a deprecation warning, and it may be removed in a future major. The forward-looking
+replacement is granting `SET_USER_ID` to the migrating account instead of `SUPER`.
 
 MySQL calls the variable "less safe" because on **shared hosting** a low-privilege user could
 define a routine that runs with the definer's rights. One shop, one application, one owner who is
@@ -215,6 +229,22 @@ re-runnable — but it should not be discovered on a go-live morning.
 
 `LedgerMigrationTest` passes `--log-bin-trust-function-creators=1` to its container rather than
 granting its user `SUPER`, so the gate exercises the least-privilege path production should use.
+
+### ⚠ The developer restore is on 8.4.11; the gate pins 8.0.43
+
+Measured 2026-10-09: the Homebrew MySQL serving the developer restore is **8.4.11**, while
+`LedgerMigrationTest` and `RechargeMigrationTest` both pin `mysql:8.0.43` because that is the
+version this file records for production. So the restore has been running a version neither the
+gate nor production exercises.
+
+For this slice that gap is closed by hand — V20–V27 were applied to a throwaway **8.4.11** as well
+as 8.0.43, reaching v27 with 5 triggers, 32 accounts and 12 rate rows on both, and
+`--log-bin-trust-function-creators=1` is accepted on both.
+
+**Worth confirming whether production is still on 8.0.43.** If it has also been upgraded, the pin
+in both migration tests should move, because a gate pinned to a version nothing runs is testing the
+wrong thing. The pin is deliberate — see `RechargeMigrationTest`'s comment — so it should be
+changed knowingly rather than floated to `8`.
 
 ### The accounts, named rather than left as placeholders
 
