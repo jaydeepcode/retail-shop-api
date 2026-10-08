@@ -49,13 +49,20 @@ Flyway runs `validate` before `migrate` by default, so until this is repaired **
 application will not start** against such a database — the new migrations never get a chance
 to apply. Repair once per database:
 
+For the **developer** database, copy-pasteable as-is:
+
 ```sh
 mvn org.flywaydb:flyway-maven-plugin:repair \
-  -Dflyway.url="jdbc:mysql://<host>:3306/recharge" \
-  -Dflyway.user="<user>" \
-  -Dflyway.password="<password>" \
+  -Dflyway.url="jdbc:mysql://localhost:3306/recharge" \
+  -Dflyway.user=CISADM \
+  -Dflyway.password=cisadm \
   -Dflyway.locations=filesystem:src/main/resources/db/migration
 ```
+
+For **production**, the same command with that environment's real host and credentials
+substituted for all three values. `<host>`-style placeholders are not valid JDBC — pasting
+them unedited fails with "Communications link failure", because the driver really does try
+to resolve a host named `<host>`.
 
 `repair` rewrites the version-8 row's checksum to match the file. It does **not** re-run the
 migration and does **not** touch the schema or any data.
@@ -70,6 +77,20 @@ release happens to be — a repair written by a different major version can reco
 the app then rejects, turning a one-off fix into a loop. And `flyway.locations` is passed
 explicitly because the goal runs outside the Spring context, so it does not read
 `spring.flyway.locations`.
+
+### The local secrets file is sourced, not executed
+
+`config/local-env.sh` (added by the secret-externalisation change) is `chmod 600` — readable,
+deliberately **not** executable, because it holds a signing key and a device credential.
+Running it as a script gives `permission denied`. Load it into the current shell instead:
+
+```sh
+. config/local-env.sh          # or: source config/local-env.sh
+```
+
+It is only needed once the externalisation has landed, because that is what replaces the
+literal values with `${...}` placeholders that have no defaults. Before then the properties
+files still carry their own values and the app starts without it.
 
 ### Where the migrations will actually apply
 
