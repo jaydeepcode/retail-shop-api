@@ -167,15 +167,37 @@ BEGIN
 END$$
 
 -- ----------------------------------------------------------------------------
--- 3. REMOVED -- lines append-only is now a GRANT.
+-- 3. Lines are never updated, by anyone, ever.
 -- ----------------------------------------------------------------------------
--- Was trg_acc_voucher_line_bu, an unconditional SIGNAL on UPDATE. A per-table
--- grant that never grants UPDATE on acc_voucher_line achieves the same thing
--- with no trigger and no SUPER privilege, and applies to every connection.
--- Verified: UPDATE is then refused with ERROR 1142 while INSERT, SELECT and
--- DELETE all still work, and the header's seal UPDATE is unaffected.
--- See db/migration/README.md. NOTE this makes the property a DEPLOYMENT step
--- rather than a schema guarantee -- the honest cost of the change.
+-- Unconditional. acc_voucher_line is the record of what was posted; historical
+-- P&L is a SUM over it, so an immutable line is what guarantees a reported
+-- figure cannot move (§4.1 mechanism 2).
+--
+-- ⚠ THIS WAS BRIEFLY A PER-TABLE GRANT INSTEAD, AND THE GRANT WAS REVERTED.
+-- A grant that never grants UPDATE does give the same guarantee with no
+-- procedural code -- verified, ERROR 1142 -- and it was chosen on 2026-10-09 to
+-- keep storage rules out of the database. Then the production account was
+-- actually inspected and the trade collapsed:
+--
+--   * CISADM holds GRANT ALL PRIVILEGES ON `recharge`.*, a DATABASE-level grant.
+--     MySQL cannot narrow that per table (ERROR 1147), so the grant route means
+--     REVOKE ALL and then re-grant per table -- 36 base tables today, plus the
+--     ledger's 13 and a view, plus everything V28-V31 adds.
+--   * And it has to be redone every time a migration adds a table, from a root
+--     connection, because the app account has no GRANT OPTION. A forgotten grant
+--     is a RUNTIME failure at the counter, not a migration failure.
+--   * Above all it saves nothing: triggers 1 and 2 need
+--     log_bin_trust_function_creators = 1 regardless, and once that is set this
+--     trigger is free.
+--
+-- The policy/storage split that motivated the grant still stands -- it is why
+-- the reconciliation lock and the rate rules are in LedgerCorrectionRules and
+-- not here. Only the MECHANISM for the storage half reverted.
+CREATE TRIGGER trg_acc_voucher_line_bu BEFORE UPDATE ON acc_voucher_line
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'acc_voucher_line is append-only';
+END$$
 
 -- ----------------------------------------------------------------------------
 -- 4. REMOVED -- the reconciliation delete lock is now a service rule.

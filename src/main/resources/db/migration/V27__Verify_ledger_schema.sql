@@ -165,7 +165,7 @@ SET @missing = (
 SET @failures = IF(@missing IS NULL, @failures, CONCAT(@failures, ' |CHECK:', @missing));
 
 -- ============================================================================
--- 5. The three remaining triggers
+-- 5. The five remaining triggers
 -- ============================================================================
 -- Reduced from seven on 2026-10-09. The four that went:
 --   lines append-only, movements append-only  -> per-table GRANTs
@@ -196,7 +196,9 @@ SET @missing = (
     FROM (
         SELECT 'trg_acc_voucher_bu' AS name
         UNION ALL SELECT 'trg_acc_voucher_line_bi'
+        UNION ALL SELECT 'trg_acc_voucher_line_bu'
         UNION ALL SELECT 'trg_acc_voucher_bd'
+        UNION ALL SELECT 'trg_acc_float_movement_bu'
     ) x
     WHERE NOT EXISTS (
         SELECT 1 FROM INFORMATION_SCHEMA.TRIGGERS
@@ -211,9 +213,7 @@ SET @failures = IF(@missing IS NULL, @failures, CONCAT(@failures, ' |TRIGGER:', 
 SET @missing = (
     SELECT GROUP_CONCAT(x.name ORDER BY x.name)
     FROM (
-        SELECT 'trg_acc_voucher_line_bu' AS name
-        UNION ALL SELECT 'trg_acc_voucher_line_bd'
-        UNION ALL SELECT 'trg_acc_float_movement_bu'
+        SELECT 'trg_acc_voucher_line_bd' AS name
         UNION ALL SELECT 'trg_acc_commission_rate_bu'
     ) x
     WHERE EXISTS (

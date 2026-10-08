@@ -172,15 +172,11 @@ rows will foreign-key them. A retired operator still satisfies `fk_rech_operator
 The front end only shows current-FY data, so an inconsistency behind that boundary is
 invisible and rewriting seven years of history to tidy it buys nothing observable.
 
-## ⚠ Two deployment steps the ledger needs, and neither is in a migration
+## ⚠ One deployment step the ledger needs, and it is not in a migration
 
-Both were found by running the migrations rather than reading them. Neither is ongoing work —
-each is done once per database — but the ledger is not correctly deployed without them.
-
-### 1. V23 needs `log_bin_trust_function_creators`, or `SUPER`
-
-MySQL 8.0.43 ships with `log_bin = ON` and `log_bin_trust_function_creators = OFF`, and in that
-state `CREATE TRIGGER` by an account without `SUPER` fails outright:
+V23 and V24 create triggers, and MySQL 8.0.43 ships with `log_bin = ON` and
+`log_bin_trust_function_creators = OFF`. In that state `CREATE TRIGGER` by an account without
+`SUPER` fails outright:
 
 ```
 ERROR 1419 (HY000): You do not have the SUPER privilege and binary logging is enabled
@@ -188,7 +184,7 @@ ERROR 1419 (HY000): You do not have the SUPER privilege and binary logging is en
 ```
 
 Measured on a clean `mysql:8.0.43` against an account holding `GRANT ALL PRIVILEGES ON
-recharge.*` (so `TRIGGER` is granted, `SUPER` is not):
+recharge.*` — so `TRIGGER` is granted, `SUPER` is not:
 
 | `log_bin` | `log_bin_trust_function_creators` | `SUPER` | `CREATE TRIGGER` |
 |---|---|---|---|
@@ -197,100 +193,87 @@ recharge.*` (so `TRIGGER` is granted, `SUPER` is not):
 | ON | OFF | yes | succeeds |
 
 **`CREATE PROCEDURE` is not affected** — also measured. That matters because V20 and V27 both use
-`DELIMITER` to create a throwaway assertion procedure, and those are free. **V23 is the only
-migration in this repository that needs the privilege**, because after the 2026-10-09 reduction it
-is the only one that creates a trigger.
+`DELIMITER` to create a throwaway assertion procedure, and those are free. Only the two
+trigger-creating migrations need anything.
 
-Preferred remedy, least privilege:
+Preferred remedy, least privilege — run once per database, as root or a DBA account:
 
 ```sql
 SET GLOBAL log_bin_trust_function_creators = 1;
 ```
 
 Put it in `my.cnf` as well, or it is lost on restart. The alternative is `SUPER` on the migrating
-account, which is not a sensible grant for an application account just to run one migration.
+account, which is not a sensible grant for an application account just to run two migrations.
 
 MySQL calls the variable "less safe" because on **shared hosting** a low-privilege user could
 define a routine that runs with the definer's rights. One shop, one application, one owner who is
 also the DBA — the risk here is negligible.
 
 **The failure mode is a migration that stops halfway:** V21 and V22's tables land, V23 fails, and
-the application will not start. It is recoverable — fix the privilege and re-migrate, since V23 is
+the application will not start. It is recoverable — set the variable and re-migrate, since V23 is
 re-runnable — but it should not be discovered on a go-live morning.
 
 `LedgerMigrationTest` passes `--log-bin-trust-function-creators=1` to its container rather than
 granting its user `SUPER`, so the gate exercises the least-privilege path production should use.
 
-### 2. Per-table grants are what make the money tables append-only
+### The accounts, named rather than left as placeholders
 
-On 2026-10-09 the trigger count went from seven to three. Two of the four that went —
-`acc_voucher_line` and `acc_float_movement` being append-only — are now enforced by **withholding
-`UPDATE`** instead. Same guarantee, no procedural code in the database, no privilege requirement,
-and it applies to every connection including hand-SQL.
-
-**Grant per table. This is the one way to get it wrong:**
-
-```sql
--- CORRECT: grant per table, and simply never grant UPDATE on the append-only two.
-GRANT SELECT, INSERT, UPDATE, DELETE ON recharge.acc_voucher          TO '<app>'@'%';
-GRANT SELECT, INSERT,         DELETE ON recharge.acc_voucher_line     TO '<app>'@'%';
-GRANT SELECT, INSERT,         DELETE ON recharge.acc_float_movement   TO '<app>'@'%';
-GRANT SELECT, INSERT, UPDATE, DELETE ON recharge.acc_reconciliation   TO '<app>'@'%';
-GRANT SELECT, INSERT, UPDATE, DELETE ON recharge.acc_commission_rate  TO '<app>'@'%';
-GRANT SELECT, INSERT, UPDATE, DELETE ON recharge.acc_float_batch      TO '<app>'@'%';
-GRANT SELECT                          ON recharge.acc_account         TO '<app>'@'%';
-GRANT SELECT                          ON recharge.acc_account_balance TO '<app>'@'%';
-```
-
-```sql
--- WRONG, and it fails loudly rather than silently, which is the one mercy here:
-GRANT ALL PRIVILEGES ON recharge.* TO '<app>'@'%';
-REVOKE UPDATE ON recharge.acc_voucher_line FROM '<app>'@'%';
--- ERROR 1147 (42000): There is no such grant defined for user ... on table 'acc_voucher_line'
-```
-
-MySQL cannot revoke below the level it granted, so a database-level `GRANT ALL` cannot be narrowed
-per table afterwards.
-
-Three things must still work after this, and all three were verified:
-
-| | |
+| | Account |
 |---|---|
-| `INSERT` / `SELECT` / `DELETE` on `acc_voucher_line` | allowed — the delete-and-re-post path needs `DELETE` |
-| `UPDATE` on `acc_voucher_line` | **refused, ERROR 1142** |
-| `UPDATE` on `acc_voucher` | allowed — sealing is an `UPDATE` on the header |
+| Developer restore | **`'CISADM'@'localhost'`** — `application.properties:9` defaults `${DB_USERNAME:CISADM}`, confirmed by `CURRENT_USER()` |
+| Production | **`${DB_USERNAME}`** — no default; supplied by the environment and deliberately not in this repository |
 
-No migration touches `acc_voucher_line` or `acc_float_movement` with an `UPDATE`, so the migrating
-account can be the same restricted account. V21's only `UPDATE`s are on `acc_account`.
+`@'localhost'` and `@'%'` are **different accounts** in MySQL, so a statement aimed at
+`'CISADM'@'%'` would have no effect on the application at all. This file has made the
+placeholder mistake before — see the `<host>` warning in the V8 repair section.
 
-**⚠ This is weaker than the trigger it replaced in exactly one way, and it is worth being plain
-about:** a trigger is a schema guarantee that V27 can verify, whereas a grant is environment
-configuration the repository cannot see — the account name differs per environment, and in
-development the migrating account may legitimately hold everything. So **V27 does not assert the
-grants.** `LedgerMigrationTest.grantsGiveAppendOnly` proves the mechanism by building a restricted
-account and probing it, but whether production is actually configured this way is a deployment
-check. Verify it per database with:
+### ⚠ Per-table grants were tried instead of two of the triggers, and reverted
 
-```sql
-SHOW GRANTS FOR '<app>'@'%';
--- acc_voucher_line and acc_float_movement must NOT list UPDATE
-```
+Recorded because the reasoning is not obvious and someone will suggest it again.
 
-### What stayed in the database, and what moved to the service
+Append-only on `acc_voucher_line` and `acc_float_movement` does not strictly need a trigger. A
+per-table grant that simply never grants `UPDATE` gives the same guarantee with no procedural code
+in the database — verified: `UPDATE` refused with ERROR 1142 while `INSERT`, `SELECT` and `DELETE`
+still work and the header's seal `UPDATE` is unaffected. It was adopted on 2026-10-09 to keep
+storage rules out of the database, and reverted the same day once the real account was inspected:
 
-| Rule | Where it lives now | Why |
+- **`CISADM` holds `GRANT ALL PRIVILEGES ON `recharge`.*`, a database-level grant.** MySQL cannot
+  narrow that per table — `REVOKE UPDATE ON recharge.acc_voucher_line` fails with **ERROR 1147**,
+  "there is no such grant defined". So the grant route means `REVOKE ALL` and then re-granting per
+  table: **36 base tables today**, plus the ledger's 13 and a view, plus everything V28–V31 adds.
+- **It would have to be redone every time a migration adds a table**, from a root connection,
+  because the app account has no `GRANT OPTION` and cannot grant to itself. A forgotten grant is a
+  **runtime** failure at the counter, not a migration failure.
+- **And it saves nothing.** The cross-row triggers need
+  `log_bin_trust_function_creators = 1` regardless, and once that is set these two are free.
+
+**What did not revert is the part that mattered.** The policy/storage split stands: the FRD §8.3
+reconciliation delete lock and commission-rate immutability are **accounting policy** and live in
+`LedgerCorrectionRules`, not in the database, where they return a sentence instead of
+`SIGNAL SQLSTATE '45000'`. Only the mechanism for the storage half went back to triggers.
+
+### What is enforced where
+
+| Rule | Where | Why |
 |---|---|---|
-| a voucher's legs sum to zero at seal | `trg_acc_voucher_bu` | cross-row; no grant can express it |
+| a voucher's legs sum to zero at seal | `trg_acc_voucher_bu` | cross-row; nothing else can express it |
 | a sealed voucher is never altered or un-sealed | `trg_acc_voucher_bu` | same trigger |
 | no leg may be added to a sealed voucher | `trg_acc_voucher_line_bi` | without it the seal check is bypassable |
+| `acc_voucher_line` is append-only | `trg_acc_voucher_line_bu` | storage property |
 | the `OPENING` voucher is never deletable | `trg_acc_voucher_bd` | nothing to re-post it from |
-| `acc_voucher_line` is append-only | **a grant** | storage property, not policy |
-| `acc_float_movement` is append-only | **a grant** | storage property, not policy |
-| a reconciled account needs a journal (FRD §8.3) | `LedgerCorrectionRules` | accounting policy; deserves a sentence |
-| a rate is closed and superseded, never edited | `LedgerCorrectionRules` | accounting policy; and §4.1 says the posted amount was always the real guarantee |
+| `acc_float_movement` is append-only | `trg_acc_float_movement_bu` | storage property |
+| a reconciled account needs a journal (FRD §8.3) | `LedgerCorrectionRules` | **policy** — deserves a sentence |
+| a rate is closed and superseded, never edited | `LedgerCorrectionRules` | **policy** — and §4.1 says the posted amount was always the real guarantee |
 
 The service validates the balance itself as well, and that duplication is deliberate: the database
-copy exists for writers that are not the application.
+copy exists for writers that are not the application, which in this schema is a documented
+operating mode rather than a hypothesis (requirement 10 has config "edited in tables with no
+screen, i.e. by hand in SQL").
+
+**⚠ The two service rules have no caller yet.** S2 ships no delete, void or rate-admin path, so
+until S5 wires them nothing stops hand-SQL deleting a reconciled voucher's lines or editing a rate
+row. They are written and tested so the rule demonstrably exists in the backend — removing a
+trigger and writing nothing would be deleting the rule, not moving it.
 
 ## How migrations are tested instead
 

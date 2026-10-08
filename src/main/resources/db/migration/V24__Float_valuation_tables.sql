@@ -128,25 +128,31 @@ CREATE TABLE IF NOT EXISTS acc_float_movement (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ============================================================================
--- 3. Append-only on movements is a GRANT, not a trigger
+-- 3. The append-only trigger (§3.2)
 -- ============================================================================
--- §3.2 says "acc_float_movement gets the same append-only treatment as
--- acc_voucher_line", and the reason is sound: the running weighted average is a
--- SUM over these rows, so a mutable row would silently restate the cost basis of
--- every sale after it.
+-- "acc_float_movement gets the same append-only treatment as acc_voucher_line"
+-- (§3.2). It is a money-adjacent record and must not be editable: the running
+-- weighted average is a SUM over these rows, so a mutable row would silently
+-- restate the cost basis of every sale after it.
 --
--- It was a BEFORE UPDATE trigger until 2026-10-09. It is now a per-table grant
--- that never grants UPDATE on this table -- same guarantee, no procedural code
--- in the database, and no log_bin_trust_function_creators / SUPER requirement.
--- The grants and a verification query are in db/migration/README.md.
+-- ⚠ Briefly a per-table GRANT instead; reverted for the reasons in V23's
+-- trigger 3 comment -- the app account holds a database-level GRANT ALL that
+-- cannot be narrowed per table, and the privilege this needs is required by
+-- V23 anyway, so the trigger is free.
 --
--- This file therefore creates NO trigger and needs no special privilege.
---
--- Deletion was never blocked here and still is not. §3.2 allows it "only
--- alongside its voucher", and that is enforced one level up: fk_fmov_voucher has
--- no ON DELETE action, so a movement cannot outlive its voucher, and V23's
--- remaining triggers plus LedgerCorrectionRules decide whether that voucher may
--- be deleted at all.
+-- Deletion is NOT blocked here, deliberately. §3.2 allows it "only alongside its
+-- voucher", and that is enforced one level up: fk_fmov_voucher has no ON DELETE
+-- action, so a movement cannot outlive its voucher.
 DROP TRIGGER IF EXISTS trg_acc_float_movement_bu;
+
+DELIMITER $$
+
+CREATE TRIGGER trg_acc_float_movement_bu BEFORE UPDATE ON acc_float_movement
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'acc_float_movement is append-only';
+END$$
+
+DELIMITER ;
 
 SELECT 'V24: complete.' AS Status;

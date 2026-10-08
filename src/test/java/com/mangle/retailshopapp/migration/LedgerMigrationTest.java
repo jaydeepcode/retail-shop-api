@@ -390,32 +390,33 @@ class LedgerMigrationTest {
 
     @Test
     @Order(9)
-    @DisplayName("exactly three triggers exist, and the four that moved out are gone")
+    @DisplayName("exactly five triggers exist, and the two policy rules are gone")
     void triggersExist() {
-        // Reduced from seven on 2026-10-09. "A posted money row is never
-        // updated" is a storage property and a per-table GRANT serves it better
-        // than a trigger; "an account reconciled past this date needs a journal"
-        // and "a rate is closed, never edited" are accounting policy and belong
-        // in the service, where they return a sentence. V23's header has the
-        // full reasoning. These three are the only enforcement of the CROSS-ROW
-        // balance invariant, which no grant can express.
-        assertEquals(List.of("trg_acc_voucher_bd", "trg_acc_voucher_bu",
-                        "trg_acc_voucher_line_bi"),
+        // Seven originally. The two that left are ACCOUNTING POLICY and now live
+        // in LedgerCorrectionRules, where they return a sentence instead of
+        // SIGNAL SQLSTATE '45000': the FRD §8.3 reconciliation delete lock, and
+        // commission-rate immutability.
+        //
+        // The five that stay are storage properties and the cross-row balance
+        // invariant. Two of them were briefly per-table GRANTs instead; that
+        // reverted once the app account turned out to hold a database-level
+        // GRANT ALL, which MySQL cannot narrow per table (ERROR 1147). V23's
+        // trigger 3 comment has the full reckoning. The decisive point: triggers
+        // 1 and 2 need log_bin_trust_function_creators regardless, so once it is
+        // set these two cost nothing.
+        assertEquals(List.of("trg_acc_float_movement_bu", "trg_acc_voucher_bd",
+                        "trg_acc_voucher_bu", "trg_acc_voucher_line_bi",
+                        "trg_acc_voucher_line_bu"),
                 strings("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS "
                         + "WHERE TRIGGER_SCHEMA = DATABASE() ORDER BY TRIGGER_NAME"));
 
-        // V23 is now the ONLY migration creating a trigger, so it is the only
-        // one needing log_bin_trust_function_creators. V20's and V27's DELIMITER
-        // blocks create PROCEDUREs, which that variable does not govern.
-        //
-        // Asserting the four are ABSENT is not pedantry: a database that ran an
-        // earlier build of V23/V24/V25 would still carry them, and the rule
-        // would then be enforced twice with the service's readable error never
-        // surfacing. V27 fails on this too, under STALETRIGGER.
+        // Asserting the two are ABSENT is not pedantry: a database that ran an
+        // earlier build would still carry them, and the rule would be enforced
+        // twice with the service's readable error never surfacing. V27 fails on
+        // this too, under STALETRIGGER.
         assertEquals(0, count("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TRIGGERS "
                 + "WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME IN "
-                + "('trg_acc_voucher_line_bu','trg_acc_voucher_line_bd',"
-                + "'trg_acc_float_movement_bu','trg_acc_commission_rate_bu')"));
+                + "('trg_acc_voucher_line_bd','trg_acc_commission_rate_bu')"));
     }
 
     // ------------------------------------------------------------------
@@ -479,10 +480,9 @@ class LedgerMigrationTest {
             refused(s, leg(100, 3, "CASH_SAFE", "DR_AMOUNT", "1.00"),
                     "a leg cannot be added to a sealed voucher, or trigger 1 could be defeated");
 
-            // ⚠ NOT asserted here any more: that UPDATE on acc_voucher_line is
-            // refused. That is now a GRANT, and this connection is the
-            // migrating account, which holds UPDATE. grantsGiveAppendOnly
-            // proves the mechanism with a properly restricted account.
+            refused(s, "UPDATE acc_voucher_line SET DR_AMOUNT = 999.00 "
+                            + "WHERE VOUCHER_ID = 100 AND LINE_NO = 1",
+                    "acc_voucher_line is append-only, unconditionally");
         } catch (SQLException e) {
             throw new AssertionError("probe setup failed", e);
         }
@@ -582,12 +582,17 @@ class LedgerMigrationTest {
                             + "WHERE OPERATOR_CODE = 'ARTL' AND ROUTE_CODE = 'DIRECT'",
                     "ck_rate_pct still bounds the rate, with no trigger involved");
 
-            // ⚠ The append-only trigger on acc_float_movement and the rate
-            // immutability trigger are BOTH gone (2026-10-09). The first is a
-            // grant, the second a service rule. So the migrating account can do
-            // this, and that is the documented trade:
-            s.execute("UPDATE acc_float_movement SET NOTE = 'reachable without the grant' "
-                    + "WHERE MOVEMENT_ID = 1");
+            refused(s, "UPDATE acc_float_movement SET NOTE = 'x' WHERE MOVEMENT_ID = 1",
+                    "the running weighted average is a SUM over these rows, so a mutable "
+                            + "row would restate the cost basis of every sale after it");
+
+            // ⚠ But the RATE trigger really is gone -- rate immutability is
+            // accounting policy and moved to LedgerCorrectionRules. So the
+            // database permits this, and asserting that it does records what the
+            // layering decision gave up rather than leaving a reader to assume
+            // the rule is enforced in two places. §4.1 is why this one was safe
+            // to move: the posted amount, not the rate, was always the real
+            // guarantee -- historical P&L is a SUM over immutable voucher lines.
             s.execute("UPDATE acc_commission_rate SET RATE_PCT = 2.750000 "
                     + "WHERE OPERATOR_CODE = 'ARTL' AND ROUTE_CODE = 'DIRECT'");
 
@@ -622,75 +627,6 @@ class LedgerMigrationTest {
             s.execute("DELETE FROM acc_account WHERE ACCOUNT_CODE = 'FLOAT_PROBE'");
         } catch (SQLException e) {
             throw new AssertionError("probe setup failed", e);
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // The two triggers that became GRANTs
-    // ------------------------------------------------------------------
-
-    @Test
-    @Order(19)
-    @DisplayName("per-table grants give append-only with no trigger and no SUPER")
-    void grantsGiveAppendOnly() {
-        // This is the mechanism that replaced trg_acc_voucher_line_bu and
-        // trg_acc_float_movement_bu. It needs a properly restricted account to
-        // mean anything, so the test builds one — the migrating account holds
-        // UPDATE and would pass trivially.
-        //
-        // ⚠ The grant must be issued PER TABLE. Granting at database level and
-        // then revoking on one table fails with ERROR 1147 ("no such grant
-        // defined"), because MySQL cannot revoke below the level it granted.
-        // That is the single most likely way to deploy this wrongly.
-        try (Connection root = DriverManager.getConnection(
-                     MYSQL.getJdbcUrl(), "root", MYSQL.getPassword());
-             Statement rs = root.createStatement()) {
-
-            rs.execute("DROP USER IF EXISTS 'ledger_app'@'%'");
-            rs.execute("CREATE USER 'ledger_app'@'%' IDENTIFIED BY 'lp'");
-            rs.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON recharge.acc_voucher "
-                    + "TO 'ledger_app'@'%'");
-            // UPDATE deliberately absent on both append-only tables.
-            rs.execute("GRANT SELECT, INSERT, DELETE ON recharge.acc_voucher_line "
-                    + "TO 'ledger_app'@'%'");
-            rs.execute("GRANT SELECT, INSERT, DELETE ON recharge.acc_float_movement "
-                    + "TO 'ledger_app'@'%'");
-            rs.execute("GRANT SELECT ON recharge.acc_account TO 'ledger_app'@'%'");
-            rs.execute("FLUSH PRIVILEGES");
-
-            try (Connection app = DriverManager.getConnection(
-                         MYSQL.getJdbcUrl(), "ledger_app", "lp");
-                 Statement as = app.createStatement()) {
-
-                // An unsealed voucher to hang legs off.
-                as.execute(voucher(900, "JOURNAL", "MANUAL", "grant probe"));
-                as.execute(leg(900, 1, "CASH_RECHARGE", "DR_AMOUNT", "7.00"));
-                as.execute(leg(900, 2, "INC_RCHG_COMM", "CR_AMOUNT", "7.00"));
-
-                // The property we are buying: no UPDATE, by any statement.
-                refused(as, "UPDATE acc_voucher_line SET DR_AMOUNT = 999.00 "
-                                + "WHERE VOUCHER_ID = 900 AND LINE_NO = 1",
-                        "the grant must make acc_voucher_line append-only");
-                refused(as, "UPDATE acc_float_movement SET NOTE = 'x' WHERE MOVEMENT_ID = 1",
-                        "the grant must make acc_float_movement append-only");
-
-                // And the three things the posting path still needs must work,
-                // or the grant would be unusable. Order matters: the leg
-                // delete-and-re-add has to happen while the voucher is still
-                // UNSEALED, because trigger 2 refuses a leg on a sealed one —
-                // which is exactly the behaviour balancedVoucherSeals relies on.
-                as.execute("DELETE FROM acc_voucher_line WHERE VOUCHER_ID = 900 AND LINE_NO = 2");
-                as.execute("INSERT INTO acc_voucher_line (VOUCHER_ID, LINE_NO, ACCOUNT_CODE, "
-                        + "CR_AMOUNT) VALUES (900, 3, 'INC_RCHG_COMM', 7.00)");
-                as.execute("UPDATE acc_voucher SET SEALED_AT = NOW() WHERE VOUCHER_ID = 900");
-                assertEquals("1", string("SELECT COUNT(*) FROM acc_voucher "
-                                + "WHERE VOUCHER_ID = 900 AND SEALED_AT IS NOT NULL"),
-                        "sealing is an UPDATE on the header and must still be permitted");
-            }
-
-            rs.execute("DROP USER 'ledger_app'@'%'");
-        } catch (SQLException e) {
-            throw new AssertionError("grant probe failed", e);
         }
     }
 
