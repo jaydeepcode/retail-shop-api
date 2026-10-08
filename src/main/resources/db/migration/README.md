@@ -127,6 +127,81 @@ with "table doesn't exist".
 tables' DDL, reconstructed from the dump. That is real work, it is not V9–V12's business, and
 nothing in the recharge module is blocked by it — so it is recorded here and left alone.
 
+## The ledger chain is V21-V27 here, not the V20-V26 the design names
+
+`design-ledger.md` §8.1 numbers the ledger migrations V20-V26 and its opening-balance
+work V27-V28. **In this repository they are V21-V27 and V28-V29**, because V20 is taken
+by a recharge-catalogue change the ledger depends on.
+
+`V20__Operator_catalog_vi_merge.sql` merges the `IDEA` and `VDFN` operators into a single
+`VI`, per `recharge-technical-decisions.md` §2.4:84-105 — *"four accounts, mapped by route
+not operator"*, with *"Vi is one wallet behind two operator codes"*. It is not ledger work,
+and `design-ledger.md:238` warns against a ledger migration reaching into `rc_operator`.
+It is numbered here anyway because it cannot go anywhere else:
+
+- `out-of-order=false`, so a migration only applies if its version is above everything applied.
+- **V13-V19 are reserved** cutover work that breaks the live legacy writer, so numbering it
+  there would make it un-runnable without also running the cutover set.
+- V21's chart of accounts foreign-keys the operator code `VI`, so it must land *before* it.
+
+**Why the merge is needed at all.** The shop holds four float wallets, not one per operator
+(§14.9 measures them: A1Topup ₹87,018, Jio ₹66,568, Airtel ₹66,239, Vi ₹39,606). The float
+account is resolved at runtime from operator and route together, with no mapping table:
+
+```
+route = 'A1TOPUP'  ->  FLOAT_A1TOPUP
+route = 'DIRECT'   ->  CONCAT('FLOAT_', OPERATOR_CODE)
+```
+
+That derivation is total **only** once `IDEA` and `VDFN` are one code. Two operator codes
+behind one wallet is the single case it cannot express. Confirmed with the owner 2026-10-08.
+
+`IDEA` and `VDFN` are retired (`IS_ACTIVE = 0`), never deleted: `rc_recharge.OPERATOR_CODE`
+foreign-keys them and V15's backfill maps legacy `SRVTEI`/`SRVTEV` rows onto them, so
+pre-cutover history stays truthful about which code was typed. **V15/V16 will need a
+decision recorded** about whether those rows map to `VI` or stay on the retired codes.
+
+## ⚠ V23, V24 and V25 need a privilege the other migrations do not
+
+**Found by running them.** MySQL 8.0.43 ships with `log_bin = ON` and
+`log_bin_trust_function_creators = OFF`, and in that state `CREATE TRIGGER` by an account
+without `SUPER` fails outright:
+
+```
+ERROR 1419 (HY000): You do not have the SUPER privilege and binary logging is enabled
+(you *might* want to use the less safe log_bin_trust_function_creators variable)
+```
+
+Measured on a clean `mysql:8.0.43` against an account holding `GRANT ALL PRIVILEGES ON
+recharge.*` (so `TRIGGER` is granted, `SUPER` is not):
+
+| `log_bin` | `log_bin_trust_function_creators` | `SUPER` | `CREATE TRIGGER` |
+|---|---|---|---|
+| ON | OFF | no | **ERROR 1419** |
+| ON | ON | no | succeeds |
+| ON | OFF | yes | succeeds |
+
+**Before the first deploy carrying V23**, one of these must be true of the account in
+`spring.datasource.username`:
+
+```sql
+-- preferred: least privilege. Put it in my.cnf too, or it is lost on restart.
+SET GLOBAL log_bin_trust_function_creators = 1;
+```
+
+or that account holds `SUPER` — which is not a sensible grant for an application account
+just to run one migration.
+
+The failure mode is **a migration that stops halfway**: V21 and V22's tables land, V23
+fails, and the application will not start. It is recoverable — fix the privilege and
+re-migrate, since V23 is re-runnable — but it should not be discovered on a go-live
+morning. Nothing in `design-ledger.md`, `implementation-plan.md` or this file mentioned it
+before S2 ran the migrations.
+
+`LedgerMigrationTest` passes `--log-bin-trust-function-creators=1` to its container rather
+than granting its user `SUPER`, so the gate exercises the least-privilege path production
+should use instead of hiding the problem behind an over-privileged account.
+
 ## How migrations are tested instead
 
 `implementation-plan.md:69` states the S1 gate as "migrations apply to a **prod copy**", not
