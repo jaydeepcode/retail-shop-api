@@ -29,6 +29,15 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
+		<!-- Pinned ABOVE the Boot 3.3.5 BOM's 1.19.8, which is the one place in
+		     this pom where overriding the BOM is correct rather than sloppy.
+		     1.19.8 ships docker-java 3.3.6, whose client negotiates Docker API
+		     1.32; Docker Engine 29 refuses anything below 1.44 outright
+		     ("client version 1.32 is too old"). The migration gate would then
+		     silently SKIP on a current Docker rather than fail, which is the
+		     worst outcome available - a gate that reports success by not
+		     running. Revisit when the Boot BOM catches up. -->
+		<testcontainers.version>1.21.3</testcontainers.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -109,6 +118,25 @@
 			<artifactId>h2</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Testcontainers, for the migration gate ONLY. The migrations are
+		     MySQL-specific - CONVERT TO CHARACTER SET, composite foreign keys,
+		     CHECK constraints, INFORMATION_SCHEMA-guarded dynamic SQL - so H2
+		     cannot run them, which is why Flyway is switched off in the test
+		     profile. A throwaway MySQL is the only way to prove a migration
+		     applies before it reaches production. Scoped exactly as
+		     design-crosscutting.md 5.2 justifies it: narrowly, for the
+		     migrations, not for every test.
+		     Versions are managed by the Boot BOM - do not pin them. -->
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>mysql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -124,6 +152,24 @@
 				<configuration>
 					<source>${java.version}</source>
 					<target>${java.version}</target>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<systemPropertyVariables>
+						<!-- docker-java reads the "api.version" SYSTEM PROPERTY, and
+						     Surefire forks a JVM that does not inherit the outer
+						     one's -D flags, so this has to be set here rather than
+						     on the mvn command line. Without it docker-java
+						     negotiates Docker API 1.32, Docker Engine 29 rejects
+						     anything below 1.44, and RechargeMigrationTest SKIPS
+						     instead of running - a gate that passes by not
+						     executing. src/test/resources/testcontainers.properties
+						     carries the same value for Testcontainers' own use. -->
+						<api.version>1.44</api.version>
+					</systemPropertyVariables>
 				</configuration>
 			</plugin>
 		</plugins>

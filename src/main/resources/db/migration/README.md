@@ -74,12 +74,42 @@ nothing in the recharge module is blocked by it — so it is recorded here and l
 ## How migrations are tested instead
 
 `implementation-plan.md:69` states the S1 gate as "migrations apply to a **prod copy**", not
-to a blank database, and that is both achievable and what `ProdCopyMigrationIT` does: it
-loads `rechargeData.sql` — the production dump, which *is* the baseline — into a throwaway
-MySQL container, applies the new migrations on top, and asserts the resulting schema with
-`INFORMATION_SCHEMA` queries in the style `design-ledger.md` §8.1 sets out for V26.
+to a blank database, and that is both achievable and what `RechargeMigrationTest` does. It
+loads `src/test/resources/db/legacy-baseline.sql` into a throwaway MySQL 8.0.43 container,
+baselines Flyway at version 8 (where production sits), applies the new migrations on top, and
+asserts the result with `INFORMATION_SCHEMA` queries in the style `design-ledger.md` §8.1 sets
+out for V26.
 
-Because the dump carries production's own `flyway_schema_history`, that container reproduces
-the V8 checksum mismatch described above, and the test runs `repair` before `migrate` exactly
-as production will have to. That makes the test the rehearsal for the production step, rather
-than a path that quietly avoids it.
+The fixture is a hand-built, data-free stand-in rather than the production dump, for two
+reasons. The dump is 9.2MB of real customer and transaction data and **this repository is
+public**, so it must never be committed; and the gate needs structure — types, collations,
+keys — not rows. Every value in the fixture was read from `INFORMATION_SCHEMA` on the
+read-only restore, including the `utf8mb3` collations that V9 exists to convert and the
+`mediumint` keys that `design-domain.md` §4.4 warns about.
+
+**The test does not rehearse the V8 `flyway repair` above.** Baselining at version 8 means
+Flyway never looks at the V8 file, so the checksum mismatch cannot arise in the container.
+The repair remains a production step that nothing here exercises — run it once, as described,
+before the first deployment that includes V8.
+
+### Running the gate
+
+The test is a normal `mvn test` and skips itself when Docker is absent, so CI without Docker
+stays green — but a skipped gate proves nothing, so check that it actually ran.
+
+Two settings are needed and are already in the repo: `api.version=1.44` in
+`src/test/resources/testcontainers.properties` and as a Surefire system property in `pom.xml`
+(Docker Engine 29 rejects the Testcontainers default of 1.32), and `testcontainers.version`
+pinned above the Boot BOM in `pom.xml`.
+
+Colima users additionally need this, because there is no `/var/run/docker.sock` to discover:
+
+```sh
+export DOCKER_HOST="unix://${HOME}/.colima/default/docker.sock"
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+export TESTCONTAINERS_DOCKER_CLIENT_STRATEGY=org.testcontainers.dockerclient.EnvironmentAndSystemPropertyClientProviderStrategy
+```
+
+A stale `~/.testcontainers.properties` pinning `docker.client.strategy` to
+`UnixSocketClientProviderStrategy` will defeat the first of those; the third overrides it.
+Docker Desktop needs none of them.
