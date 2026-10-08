@@ -57,9 +57,20 @@
 -- which is correct — pre-D history is never posted to the ledger (L13).
 --
 -- ⚠ TWO CONSEQUENCES FOR MIGRATIONS NOT IN THIS SLICE:
---   * V15/V16 must map SRVTEI and SRVTEV to 'VI' for rows that should be treated
---     as current, or leave them on IDEA/VDFN as history. design-domain.md §3.2's
---     seed mapping table needs a decision recorded before V15 is written.
+--   * V15's backfill SPLITS BY DATE on the operator, decided 2026-10-09 and
+--     recorded in log §15.8 / design-domain.md §3.2. Current-financial-year rows
+--     get 'VI' -- including SRVTEI and SRVTEV, which also take route A1TOPUP --
+--     while everything older keeps whichever code was typed. The front end only
+--     shows current-FY data, so an inconsistency behind that boundary is
+--     invisible and rewriting seven years of history buys nothing.
+--
+--     That is why the retirement below is an UPDATE and not a DELETE: those
+--     older rows foreign-key IDEA and VDFN. A retired operator still satisfies
+--     fk_rech_operator; IS_ACTIVE governs the picker, not referential integrity.
+--
+--     Note the float derivation is NEVER applied to those pre-D rows, so
+--     CONCAT('FLOAT_','IDEA') naming no account is not a defect -- pre-D history
+--     is not posted to the ledger at all (design-ledger.md L13).
 --   * V16 is still what repoints the A1Topup operators' DEFAULT_ROUTE_CODE. This
 --     migration leaves every operator on DIRECT, as V10 left them.
 --

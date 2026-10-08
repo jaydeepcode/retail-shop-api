@@ -156,10 +156,21 @@ route = 'DIRECT'   ->  CONCAT('FLOAT_', OPERATOR_CODE)
 That derivation is total **only** once `IDEA` and `VDFN` are one code. Two operator codes
 behind one wallet is the single case it cannot express. Confirmed with the owner 2026-10-08.
 
-`IDEA` and `VDFN` are retired (`IS_ACTIVE = 0`), never deleted: `rc_recharge.OPERATOR_CODE`
-foreign-keys them and V15's backfill maps legacy `SRVTEI`/`SRVTEV` rows onto them, so
-pre-cutover history stays truthful about which code was typed. **V15/V16 will need a
-decision recorded** about whether those rows map to `VI` or stay on the retired codes.
+`IDEA` and `VDFN` are retired (`IS_ACTIVE = 0`), never deleted, because older `rc_recharge`
+rows will foreign-key them. A retired operator still satisfies `fk_rech_operator` —
+`IS_ACTIVE` governs the picker, not referential integrity.
+
+**V15's backfill splits by date**, decided 2026-10-09 (`recharge-technical-decisions.md`
+§15.8, `design-domain.md` §3.2):
+
+| Rows | Operator | Route |
+|---|---|---|
+| `SRVTEI` / `SRVTEV` in the current FY | `VI` | `A1TOPUP` |
+| `IDEA` / `VDFN` in the current FY | `VI` | `DIRECT` |
+| Everything older | left exactly as typed | unchanged |
+
+The front end only shows current-FY data, so an inconsistency behind that boundary is
+invisible and rewriting seven years of history to tidy it buys nothing observable.
 
 ## ⚠ V23, V24 and V25 need a privilege the other migrations do not
 
