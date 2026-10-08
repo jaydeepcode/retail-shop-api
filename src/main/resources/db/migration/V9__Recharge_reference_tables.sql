@@ -5,9 +5,28 @@
 -- Creates the six ref_* code tables, rc_setting with its six seeds, and
 -- converts the four utf8mb3 legacy tables to utf8mb4.
 --
--- SAFE ALONGSIDE THE LEGACY WRITER (implementation-plan.md §0.2): every table
--- created here is new and empty, and the charset conversions change no value.
--- Nothing the legacy application reads or writes is altered.
+-- ALONGSIDE THE LEGACY WRITER (implementation-plan.md §0.2): no SEMANTIC change.
+-- Every table created here is new and empty, and the charset conversions alter
+-- no value and no column the legacy application reads or writes.
+--
+-- ⚠ BUT THIS MIGRATION IS NOT "PURELY ADDITIVE", AND THE PLAN SAYS IT IS.
+-- implementation-plan.md:42 and next-session-s1.md:52 both describe V9-V12 as
+-- "purely additive, all tables empty". That is true of V12 and of everything in
+-- sections 1-3 below. It is NOT true of section 4: CONVERT TO CHARACTER SET
+-- changes column types, so InnoDB cannot do it in place — it falls back to
+-- ALGORITHM=COPY, rebuilding the table while holding an exclusive metadata
+-- lock. The legacy writer is BLOCKED for the duration, not merely slowed.
+--
+-- Measured scale, so the window can be judged rather than guessed (restore,
+-- 2026-10-08): rc_txn_details 6.5MB/99,038 rows, rc_txn_header 6.5MB/73,469,
+-- rc_credit_req 0.3MB/4,301, rc_dishtv_dtls 0.1MB/458 — about 13MB in total.
+-- All four conversions together ran in 0.34s in the migration test. So this is
+-- a sub-second stall at today's volume, not an outage. It is still a stall:
+-- RUN V9 IN A QUIET MINUTE, not mid-afternoon at the counter.
+--
+-- The conversion cannot simply be deferred — V12's DISHTV_NO foreign key and
+-- V15's ref_company join both require it (§6.1 P0.6, §8.9). The honest summary
+-- is "additive in effect, briefly blocking in execution".
 --
 -- Idempotent throughout, following the repo's V7 (CREATE TABLE IF NOT EXISTS)
 -- and V3 (INFORMATION_SCHEMA-guarded ALTER) idioms.

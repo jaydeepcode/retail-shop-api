@@ -7,9 +7,30 @@
 -- and gains three columns — a payment status, staff attribution, and the named
 -- customer a credit tender requires.
 --
--- SAFE ALONGSIDE THE LEGACY WRITER: all three columns are additive, and
--- STATUS_CODE carries a DEFAULT so the legacy application's INSERTs — which
--- name neither it nor the other two — keep working unchanged.
+-- ALONGSIDE THE LEGACY WRITER: all three columns are additive, and STATUS_CODE
+-- carries a DEFAULT so the legacy application's INSERTs — which name neither it
+-- nor the other two — keep working unchanged. Two points were raised against
+-- this and are worth recording with their evidence, because both look alarming
+-- and only one of them is real:
+--
+--   * "A legacy header inserted after the ALTER gets a NULL STATUS_CODE, or the
+--     insert fails outright." It does not. The column is NOT NULL DEFAULT
+--     'SETTLED', so an INSERT that omits it takes the default. That is the whole
+--     reason the default exists rather than a separate UPDATE pass.
+--
+--   * "The new UNIQUE(SEQ_NO) can reject the legacy app's next multi-line
+--     basket." It cannot. SEQ_NO is AUTO_INCREMENT and allocated GLOBALLY, not
+--     per basket: measured 2026-10-08, it runs 1..99,050 over 99,038 rows with
+--     99,038 distinct values (the 12 gaps are deletions), while the largest
+--     single basket holds 12 lines. A multi-line basket receives twelve
+--     distinct global values, and a UNIQUE constraint cannot be violated by the
+--     server handing out its own next number.
+--
+-- What IS true is that these are ALTERs on a live table and therefore take a
+-- metadata lock. Adding a column with a default and adding secondary indexes
+-- are both ALGORITHM=INPLACE in InnoDB, so the lock is brief and concurrent DML
+-- continues — unlike V9's charset conversion, which genuinely blocks. See V9's
+-- header.
 --
 -- ⚠ THIS MIGRATION DOES NOT TOUCH MONEY. The semantics change described in
 -- §4.1 (amt_tndred / amt_returned always >= 0) and its CHECK constraint belong
