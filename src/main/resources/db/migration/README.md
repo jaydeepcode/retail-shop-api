@@ -130,8 +130,11 @@ nothing in the recharge module is blocked by it — so it is recorded here and l
 ## The ledger chain is V21-V27 here, not the V20-V26 the design names
 
 `design-ledger.md` §8.1 numbers the ledger migrations V20-V26 and its opening-balance
-work V27-V28. **In this repository they are V21-V27 and V28-V29**, because V20 is taken
-by a recharge-catalogue change the ledger depends on.
+work V27-V28. **In this repository they are V21-V27, and the opening balances are now
+V29-V30**, because V20 is taken by a recharge-catalogue change the ledger depends on and
+V28 is taken by the counter's own prerequisites. The opening balances have therefore
+shifted twice; they are S6 go-live work and apply after everything here regardless, so
+each shift costs nothing but a renumber.
 
 `V20__Operator_catalog_vi_merge.sql` merges the `IDEA` and `VDFN` operators into a single
 `VI`, per `recharge-technical-decisions.md` §2.4:84-105 — *"four accounts, mapped by route
@@ -171,6 +174,52 @@ rows will foreign-key them. A retired operator still satisfies `fk_rech_operator
 
 The front end only shows current-FY data, so an inconsistency behind that boundary is
 invisible and rewriting seven years of history to tidy it buys nothing observable.
+
+## V28 carries four things three documents decided and no migration built
+
+`V28__Recharge_counter_prerequisites.sql` is S3's own migration. Nothing in it is a new
+design decision; each part is a decision that was recorded and then never reached a file.
+Found by building the counter against the schema rather than against the documents.
+
+| | What | Decided in | Why it was missing |
+|---|---|---|---|
+| 1 | `rc_recharge.SURCHARGE` | `design-api.md` §3.3, log §10.2, §15.11 | `design-domain.md` §4.4's DDL never gained the column, so V12 faithfully created the table without it. V21 had already seeded `INC_RCHG_SURCHARGE`, so **the income account existed with nothing to post to it.** |
+| 2 | `surcharge.default.tv` / `.mobile` in `rc_setting` | log §15.11 | §3.3 defaults an absent surcharge to "the configured amount for the service type"; there was no configured amount anywhere. |
+| 3 | `rc_operator_preset` replaced with the measured sets | log §14.10 | V10's own header calls its amounts "the design's proposal ... Treat the values as provisional, not as a decision". §14.10 is the confirmation and it contradicts the proposal structurally, not numerically. |
+| 4 | `rc_credit_req`: three columns, and `CRED_DTTM_UNIQUE` dropped | `design-domain.md` §4.5, §6.4 | Assigned to **V17**, which sits behind V13/V14 in a chain `out-of-order=false` will not let S3 skip. |
+
+**Item 4 is the one that blocks rather than annoys.** `CRED_DTTM_UNIQUE` is UNIQUE on
+`CRED_DTTM` alone, so it forbids two *different* customers being given credit in the same
+second — "not a business rule; it is an accident" (§6.4). It holds today only because one
+operator has been typing at human speed for seven years (4,301 of 4,301 distinct). The
+counter writes a credit row inside the settle transaction, so the first time two staff
+settle concurrently it throws from inside a transaction carrying a sale.
+`WaterTransactionService.populateCreditDebitRecord` shares the bug today.
+
+**Item 3 has one figure worth a second look, flagged rather than decided.** §14.10 measured
+the pre-merge `VI` code at 23 recharges — "too thin to preset" — and measured `IDEA`
+separately at 199/299/26/179. V20 then merged `IDEA` and `VDFN` into `VI`, so `VI` now
+inherits that volume while the presets measured for it belong to a retired code.
+Implemented literally, which leaves the shop's third-largest float with no amount chips. If
+the owner wants `VI` to inherit `IDEA`'s set it is one `INSERT` into a table built to be
+hand-edited — no release, no code change.
+
+### What V17 keeps when cutover writes it
+
+V28 deliberately left two of §4.5's items behind, and V17 must guard its remaining `ALTER`s
+the way V28 does or it will fail on a database that already has V28.
+
+- **The two placeholder `rs_cust_dtls` rows (`CUST_ID` 191 and 311) and the FK
+  `CUST_ID -> rs_cust_dtls` they enable.** Inserting rows into `rs_cust_dtls` is writing to
+  the book of record, and S6 is the only slice allowed to. Without them the FK fails errno
+  1452. S3 does not need it: the counter resolves a customer through
+  `CustomerDirectoryService` before writing a credit row, so the guarantee it relies on is a
+  service check on the way in.
+- **FK `req_type -> ref_credit_req_type`.** V9 seeded the reference table, but the
+  constraint needs every one of the 4,301 existing `req_type` values to already be a seeded
+  code, and that has only been verified against the brief, not the live column. An
+  unverified constraint on the book of record is exactly the shape of failure that stops a
+  migration halfway.
 
 ## ⚠ One deployment step the ledger needs, and it is not in a migration
 
@@ -326,10 +375,36 @@ Flyway never looks at the V8 file, so the checksum mismatch cannot arise in the 
 The repair remains a production step that nothing here exercises — run it once, as described,
 before the first deployment that includes V8.
 
+### Three gates, each capped at its own slice
+
+There is one gate per slice, and each caps Flyway at the chain that slice ships. That is what
+lets all three stay correct at once:
+
+| Gate | Flyway target | Asserts |
+|---|---|---|
+| `RechargeMigrationTest` | **12** | S1's reference tables, the operator catalogue, and V10's *provisional* presets |
+| `LedgerMigrationTest` | **27** | S2's chart of accounts, the voucher tables, and all five triggers both existing and firing |
+| `RechargeCounterMigrationTest` | **28** | S3's surcharge column, the measured presets, and `rc_credit_req` |
+
+`RechargeMigrationTest` still asserting 45 presets while `RechargeCounterMigrationTest`
+asserts 12 is not a contradiction: at V12 there genuinely are 45, and V28 is what replaces
+them. Bolting V28's assertions onto an existing gate would have forced one of the earlier
+ones to stop describing its own slice.
+
+**V13-V19 are excluded by all three**, and raising a cap does not relax that — V28 is above
+the reserved block, not inside it.
+
+Note that two of the new gate's assertions are **writes, not `INFORMATION_SCHEMA` reads**: a
+negative surcharge must be refused, and two customers must be able to take credit in the same
+second. A dropped index and an index that never existed look identical to a structural check,
+and the failure being guarded against is a write failing.
+
 ### Running the gate
 
 The test is a normal `mvn test` and skips itself when Docker is absent, so CI without Docker
-stays green — but a skipped gate proves nothing, so check that it actually ran.
+stays green — but a skipped gate proves nothing, so check that it actually ran. With all
+three gates plus the two ledger service tests, a genuine local run is **138 tests with 0
+skipped**; the same command with Docker unreachable is 138 with 52 skipped and still exits 0.
 
 Two settings are needed and are already in the repo: `api.version=1.44` in
 `src/test/resources/testcontainers.properties` and as a Surefire system property in `pom.xml`

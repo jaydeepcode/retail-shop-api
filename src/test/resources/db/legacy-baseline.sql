@@ -89,8 +89,11 @@ CREATE TABLE rc_txn_details (
     CONSTRAINT TXN_ID FOREIGN KEY (TXN_ID) REFERENCES rc_txn_header (TXN_ID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
 
--- CRED_DTTM_UNIQUE is reproduced because it is real and because V17 drops it
+-- CRED_DTTM_UNIQUE is reproduced because it is real and because V28 drops it
 -- permanently (§6.4) — a later migration test needs to find it here to drop.
+-- design-domain.md §6.3 had assigned the drop to V17, but V17 sits behind V13
+-- and V14 in a chain that out-of-order=false will not let S3 skip, so V28 takes
+-- it. RechargeCounterMigrationTest is the test that finds it here.
 -- It is on CRED_DTTM alone, so it forbids two different customers being given
 -- credit in the same second, which is an accident rather than a business rule.
 CREATE TABLE rc_credit_req (
