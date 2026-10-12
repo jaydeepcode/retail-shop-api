@@ -127,6 +127,184 @@ with "table doesn't exist".
 tables' DDL, reconstructed from the dump. That is real work, it is not V9–V12's business, and
 nothing in the recharge module is blocked by it — so it is recorded here and left alone.
 
+## The ledger chain is V21-V27 here, not the V20-V26 the design names
+
+`design-ledger.md` §8.1 numbers the ledger migrations V20-V26 and its opening-balance
+work V27-V28. **In this repository they are V21-V27 and V28-V29**, because V20 is taken
+by a recharge-catalogue change the ledger depends on.
+
+`V20__Operator_catalog_vi_merge.sql` merges the `IDEA` and `VDFN` operators into a single
+`VI`, per `recharge-technical-decisions.md` §2.4:84-105 — *"four accounts, mapped by route
+not operator"*, with *"Vi is one wallet behind two operator codes"*. It is not ledger work,
+and `design-ledger.md:238` warns against a ledger migration reaching into `rc_operator`.
+It is numbered here anyway because it cannot go anywhere else:
+
+- `out-of-order=false`, so a migration only applies if its version is above everything applied.
+- **V13-V19 are reserved** cutover work that breaks the live legacy writer, so numbering it
+  there would make it un-runnable without also running the cutover set.
+- V21's chart of accounts foreign-keys the operator code `VI`, so it must land *before* it.
+
+**Why the merge is needed at all.** The shop holds four float wallets, not one per operator
+(§14.9 measures them: A1Topup ₹87,018, Jio ₹66,568, Airtel ₹66,239, Vi ₹39,606). The float
+account is resolved at runtime from operator and route together, with no mapping table:
+
+```
+route = 'A1TOPUP'  ->  FLOAT_A1TOPUP
+route = 'DIRECT'   ->  CONCAT('FLOAT_', OPERATOR_CODE)
+```
+
+That derivation is total **only** once `IDEA` and `VDFN` are one code. Two operator codes
+behind one wallet is the single case it cannot express. Confirmed with the owner 2026-10-08.
+
+`IDEA` and `VDFN` are retired (`IS_ACTIVE = 0`), never deleted, because older `rc_recharge`
+rows will foreign-key them. A retired operator still satisfies `fk_rech_operator` —
+`IS_ACTIVE` governs the picker, not referential integrity.
+
+**V15's backfill splits by date**, decided 2026-10-09 (`recharge-technical-decisions.md`
+§15.8, `design-domain.md` §3.2):
+
+| Rows | Operator | Route |
+|---|---|---|
+| `SRVTEI` / `SRVTEV` in the current FY | `VI` | `A1TOPUP` |
+| `IDEA` / `VDFN` in the current FY | `VI` | `DIRECT` |
+| Everything older | left exactly as typed | unchanged |
+
+The front end only shows current-FY data, so an inconsistency behind that boundary is
+invisible and rewriting seven years of history to tidy it buys nothing observable.
+
+## ⚠ One deployment step the ledger needs, and it is not in a migration
+
+V23 and V24 create triggers, and MySQL 8.0.43 ships with `log_bin = ON` and
+`log_bin_trust_function_creators = OFF`. In that state `CREATE TRIGGER` by an account without
+`SUPER` fails outright:
+
+```
+ERROR 1419 (HY000): You do not have the SUPER privilege and binary logging is enabled
+(you *might* want to use the less safe log_bin_trust_function_creators variable)
+```
+
+Measured on a clean `mysql:8.0.43` against an account holding `GRANT ALL PRIVILEGES ON
+recharge.*` — so `TRIGGER` is granted, `SUPER` is not:
+
+| `log_bin` | `log_bin_trust_function_creators` | `SUPER` | `CREATE TRIGGER` |
+|---|---|---|---|
+| ON | OFF | no | **ERROR 1419** |
+| ON | ON | no | succeeds |
+| ON | OFF | yes | succeeds |
+
+**`CREATE PROCEDURE` is not affected** — also measured. That matters because V20 and V27 both use
+`DELIMITER` to create a throwaway assertion procedure, and those are free. Only the two
+trigger-creating migrations need anything.
+
+Preferred remedy, least privilege. **Use `SET PERSIST`, not `SET GLOBAL`** — it sets the running
+value *and* persists it, so there is no `my.cnf` edit to remember and nothing to lose on restart.
+Run once per database, as root or a DBA account:
+
+```sh
+mysql -u root -p -e "SET PERSIST log_bin_trust_function_creators = 1;"
+```
+
+Verified on 8.4.11: it writes the value to `mysqld-auto.cnf` in the data directory
+(`/opt/homebrew/var/mysql/` on the Homebrew install) and survives a restart. Confirm it with an
+ordinary account, which can read the variable without any privilege:
+
+```sh
+mysql -h127.0.0.1 -uCISADM -pcisadm -N -e "SELECT @@log_bin_trust_function_creators;"
+```
+
+The alternative is `SUPER` on the migrating account, which is not a sensible grant for an
+application account just to run two migrations.
+
+**⚠ The variable is deprecated in the 8.x line.** It works on both 8.0.43 and 8.4.11 — both tested
+— but expect a deprecation warning, and it may be removed in a future major. The forward-looking
+replacement is granting `SET_USER_ID` to the migrating account instead of `SUPER`.
+
+MySQL calls the variable "less safe" because on **shared hosting** a low-privilege user could
+define a routine that runs with the definer's rights. One shop, one application, one owner who is
+also the DBA — the risk here is negligible.
+
+**The failure mode is a migration that stops halfway:** V21 and V22's tables land, V23 fails, and
+the application will not start. It is recoverable — set the variable and re-migrate, since V23 is
+re-runnable — but it should not be discovered on a go-live morning.
+
+`LedgerMigrationTest` passes `--log-bin-trust-function-creators=1` to its container rather than
+granting its user `SUPER`, so the gate exercises the least-privilege path production should use.
+
+### ⚠ The developer restore is on 8.4.11; the gate pins 8.0.43
+
+Measured 2026-10-09: the Homebrew MySQL serving the developer restore is **8.4.11**, while
+`LedgerMigrationTest` and `RechargeMigrationTest` both pin `mysql:8.0.43` because that is the
+version this file records for production. So the restore has been running a version neither the
+gate nor production exercises.
+
+For this slice that gap is closed by hand — V20–V27 were applied to a throwaway **8.4.11** as well
+as 8.0.43, reaching v27 with 5 triggers, 32 accounts and 12 rate rows on both, and
+`--log-bin-trust-function-creators=1` is accepted on both.
+
+**Worth confirming whether production is still on 8.0.43.** If it has also been upgraded, the pin
+in both migration tests should move, because a gate pinned to a version nothing runs is testing the
+wrong thing. The pin is deliberate — see `RechargeMigrationTest`'s comment — so it should be
+changed knowingly rather than floated to `8`.
+
+### The accounts, named rather than left as placeholders
+
+| | Account |
+|---|---|
+| Developer restore | **`'CISADM'@'localhost'`** — `application.properties:9` defaults `${DB_USERNAME:CISADM}`, confirmed by `CURRENT_USER()` |
+| Production | **`${DB_USERNAME}`** — no default; supplied by the environment and deliberately not in this repository |
+
+`@'localhost'` and `@'%'` are **different accounts** in MySQL, so a statement aimed at
+`'CISADM'@'%'` would have no effect on the application at all. This file has made the
+placeholder mistake before — see the `<host>` warning in the V8 repair section.
+
+### ⚠ Per-table grants were tried instead of two of the triggers, and reverted
+
+Recorded because the reasoning is not obvious and someone will suggest it again.
+
+Append-only on `acc_voucher_line` and `acc_float_movement` does not strictly need a trigger. A
+per-table grant that simply never grants `UPDATE` gives the same guarantee with no procedural code
+in the database — verified: `UPDATE` refused with ERROR 1142 while `INSERT`, `SELECT` and `DELETE`
+still work and the header's seal `UPDATE` is unaffected. It was adopted on 2026-10-09 to keep
+storage rules out of the database, and reverted the same day once the real account was inspected:
+
+- **`CISADM` holds `GRANT ALL PRIVILEGES ON `recharge`.*`, a database-level grant.** MySQL cannot
+  narrow that per table — `REVOKE UPDATE ON recharge.acc_voucher_line` fails with **ERROR 1147**,
+  "there is no such grant defined". So the grant route means `REVOKE ALL` and then re-granting per
+  table: **36 base tables today**, plus the ledger's 13 and a view, plus everything V28–V31 adds.
+- **It would have to be redone every time a migration adds a table**, from a root connection,
+  because the app account has no `GRANT OPTION` and cannot grant to itself. A forgotten grant is a
+  **runtime** failure at the counter, not a migration failure.
+- **And it saves nothing.** The cross-row triggers need
+  `log_bin_trust_function_creators = 1` regardless, and once that is set these two are free.
+
+**What did not revert is the part that mattered.** The policy/storage split stands: the FRD §8.3
+reconciliation delete lock and commission-rate immutability are **accounting policy** and live in
+`LedgerCorrectionRules`, not in the database, where they return a sentence instead of
+`SIGNAL SQLSTATE '45000'`. Only the mechanism for the storage half went back to triggers.
+
+### What is enforced where
+
+| Rule | Where | Why |
+|---|---|---|
+| a voucher's legs sum to zero at seal | `trg_acc_voucher_bu` | cross-row; nothing else can express it |
+| a sealed voucher is never altered or un-sealed | `trg_acc_voucher_bu` | same trigger |
+| no leg may be added to a sealed voucher | `trg_acc_voucher_line_bi` | without it the seal check is bypassable |
+| `acc_voucher_line` is append-only | `trg_acc_voucher_line_bu` | storage property |
+| the `OPENING` voucher is never deletable | `trg_acc_voucher_bd` | nothing to re-post it from |
+| `acc_float_movement` is append-only | `trg_acc_float_movement_bu` | storage property |
+| a reconciled account needs a journal (FRD §8.3) | `LedgerCorrectionRules` | **policy** — deserves a sentence |
+| a rate is closed and superseded, never edited | `LedgerCorrectionRules` | **policy** — and §4.1 says the posted amount was always the real guarantee |
+
+The service validates the balance itself as well, and that duplication is deliberate: the database
+copy exists for writers that are not the application, which in this schema is a documented
+operating mode rather than a hypothesis (requirement 10 has config "edited in tables with no
+screen, i.e. by hand in SQL").
+
+**⚠ The two service rules have no caller yet.** S2 ships no delete, void or rate-admin path, so
+until S5 wires them nothing stops hand-SQL deleting a reconciled voucher's lines or editing a rate
+row. They are written and tested so the rule demonstrably exists in the backend — removing a
+trigger and writing nothing would be deleting the rule, not moving it.
+
 ## How migrations are tested instead
 
 `implementation-plan.md:69` states the S1 gate as "migrations apply to a **prod copy**", not
