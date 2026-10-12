@@ -110,6 +110,17 @@
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- @WithMockUser, so the /recharge/** authorisation rule can be asserted
+		     rather than assumed. design-api.md §3.5 is a single matcher whose
+		     correctness is invisible in a diff: placed below anyRequest() it
+		     compiles, deploys and silently does nothing, because Spring evaluates
+		     matchers in order. Without this dependency there is no way to tell a
+		     working rule from an absent one. Version managed by the Boot BOM. -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- In-memory DB for the test profile. application-test.properties already
 		     expected H2 but the dependency was missing, so no test could start.
 		     Version is managed by the Boot BOM - do not pin it. -->
