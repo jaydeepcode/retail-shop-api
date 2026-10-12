@@ -285,7 +285,50 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- silently dropped.
 
 -- ============================================================================
--- 5. DEFAULT_ROUTE_CODE for the operators with no direct connection
+-- 5. rc_idempotency (design-api.md 7.1)
+-- ============================================================================
+-- ⚠ ALSO SPECIFIED AND NEVER BUILT. 7.1 names the table outright --
+-- "Table rc_idempotency (key_value UNIQUE, endpoint, payment_id, created_at),
+-- pruned after 48 hours" -- and 4.3 step 3 makes inserting into it the FIRST
+-- write of the settle transaction. No migration created it, so the one
+-- unrecoverable operation in the module had no guard at all.
+--
+-- Why it is the one operation worth a key (7's threat table, row 1):
+-- "duplicate money taken from a customer is the one error the shop cannot
+-- detect after the fact". Marking a recharge complete is naturally idempotent, a
+-- retry is guarded by its own unique key, and a credit settlement is small,
+-- visible and correctable by a second entry in the statement. Only the settle
+-- needs this.
+--
+-- KEY_VALUE is the primary key rather than a surrogate id with a unique index.
+-- It is the natural key, every access is a point lookup on it, and a surrogate
+-- would add a column nothing reads.
+--
+-- PAYMENT_ID is NULLABLE even though the flow always sets it, because 4.3 step 3
+-- inserts this row BEFORE the payment header exists -- that ordering is the whole
+-- mechanism: "a duplicate key here aborts the whole transaction before any money
+-- is written, which is the correct outcome". It is updated within the same
+-- transaction once the header has its id.
+--
+-- No FK to rc_txn_header, deliberately. The row outlives nothing and prunes on a
+-- timer, so a cascade or a restrict would both be wrong: a pruned idempotency row
+-- must not take a payment with it, and a payment must not be undeletable because
+-- a key row points at it.
+CREATE TABLE IF NOT EXISTS rc_idempotency (
+    KEY_VALUE  VARCHAR(80)  NOT NULL,
+    ENDPOINT   VARCHAR(60)  NOT NULL,
+    PAYMENT_ID MEDIUMINT    NULL,
+    CRE_BY     INT          NULL,
+    CRE_DTTM   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (KEY_VALUE),
+    -- Serves the 48-hour prune, which is a range scan on this column alone.
+    KEY idx_idem_created (CRE_DTTM),
+    CONSTRAINT fk_idem_creby FOREIGN KEY (CRE_BY)
+        REFERENCES rc_user (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ============================================================================
+-- 6. DEFAULT_ROUTE_CODE for the operators with no direct connection
 -- ============================================================================
 -- ⚠ ALSO TAKEN FROM A CUTOVER MIGRATION, and without it 37% of recharges fail
 -- at the counter on day one. V10 seeds DEFAULT_ROUTE_CODE = 'DIRECT' for every

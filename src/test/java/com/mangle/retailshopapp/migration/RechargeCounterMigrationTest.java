@@ -358,6 +358,50 @@ class RechargeCounterMigrationTest {
     }
 
     // ------------------------------------------------------------------
+    // 6. rc_idempotency
+    // ------------------------------------------------------------------
+
+    @Test
+    @Order(12)
+    @DisplayName("rc_idempotency exists, keyed on the value itself")
+    void idempotencyTable() {
+        // design-api.md §7.1 named this table and no migration built it, so the
+        // one unrecoverable operation in the module had no guard: "duplicate money
+        // taken from a customer is the one error the shop cannot detect after the
+        // fact" (§7's threat table, row 1).
+        assertTrue(tableExists("rc_idempotency"));
+        assertEquals("NO", columnNullable("rc_idempotency", "KEY_VALUE"));
+        assertEquals("YES", columnNullable("rc_idempotency", "PAYMENT_ID"),
+                "§4.3 step 3 inserts the key BEFORE the payment header exists — that "
+                        + "ordering is the whole mechanism");
+        assertEquals("mediumint", columnType("rc_idempotency", "PAYMENT_ID"),
+                "matching rc_txn_header.TXN_ID, even without an FK");
+        assertTrue(indexExists("rc_idempotency", "idx_idem_created"),
+                "the 48-hour prune is a range scan on CRE_DTTM");
+    }
+
+    @Test
+    @Order(13)
+    @DisplayName("a duplicate idempotency key is refused by the database")
+    void idempotencyKeyIsUnique() {
+        // Asserted as a write, because the guarantee is a write failing. An
+        // application-side "have I seen this key?" check would be a race in
+        // itself (§7.1), so the unique constraint IS the mechanism.
+        try (Connection c = connect(); Statement s = c.createStatement()) {
+            s.executeUpdate("INSERT INTO rc_idempotency (KEY_VALUE, ENDPOINT) "
+                    + "VALUES ('9f2b7c1e-4d5a-4b8f-9c3e-1a2b3c4d5e6f', 'settle')");
+
+            refused(s, "INSERT INTO rc_idempotency (KEY_VALUE, ENDPOINT) "
+                            + "VALUES ('9f2b7c1e-4d5a-4b8f-9c3e-1a2b3c4d5e6f', 'settle')",
+                    "the same key twice must be refused");
+
+            s.executeUpdate("DELETE FROM rc_idempotency");
+        } catch (SQLException e) {
+            throw new AssertionError("idempotency probe failed", e);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Helpers — the same shape as the other two gates
     // ------------------------------------------------------------------
 
@@ -398,6 +442,11 @@ class RechargeCounterMigrationTest {
     private static Connection connect() throws SQLException {
         return DriverManager.getConnection(
                 MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
+    }
+
+    private static boolean tableExists(String table) {
+        return exists("SELECT 1 FROM INFORMATION_SCHEMA.TABLES "
+                + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + table + "'");
     }
 
     private static String columnType(String table, String column) {
