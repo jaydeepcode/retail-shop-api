@@ -28,14 +28,48 @@
 -- ----------------------------------------------------------------------------
 -- Parents of the new foreign keys. Both are utf8mb4_0900_ai_ci in production.
 -- ----------------------------------------------------------------------------
+-- ⚠ ALSO EXTENDED 2026-10-12, for the same reason as rs_cust_dtls below: the
+-- credit statement joins USER_NAME to say who extended each credit, which is
+-- the whole of the authorisation control for credit (design-api.md §3.5), and
+-- ROLES is what log §15.11's "ROLE_USER already is the staff role" is about.
+-- Columns read from the User entity's mapping. No rows.
 CREATE TABLE rc_user (
-    id INT NOT NULL AUTO_INCREMENT,
-    PRIMARY KEY (id)
+    id              INT          NOT NULL AUTO_INCREMENT,
+    USER_NAME       VARCHAR(45)  NOT NULL,
+    PASSWORD        VARCHAR(80)  NOT NULL,
+    ROLES           VARCHAR(80)  NOT NULL,
+    ACCOUNT_STATUS  VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+    APPROVED_BY     INT          NULL,
+    APPROVED_DATE   DATETIME     NULL,
+    LAST_LOGIN_DATE DATETIME     NULL,
+    CREATED_DATE    DATETIME     NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_user_name (USER_NAME)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- ⚠ EXTENDED 2026-10-12 from a bare CUST_ID stub to production's real shape.
+-- The stub was enough for S1's and S2's gates, which only ever foreign-key
+-- against it, but not for S3: the credit book joins FIRST_NAME / LAST_NAME /
+-- CONTACT_NUM and the counter searches them. Flyway baselines at version 8, so
+-- V1 -- whose first statement is the ALTER that would add these in a real
+-- database -- never runs here and cannot supply them.
+--
+-- Columns read from CustomerDetails' own mapping rather than guessed, so the
+-- entity and the fixture agree by construction. Still DATA-FREE: the production
+-- dump is 9.2MB of real customer data and this repository is public.
 CREATE TABLE rs_cust_dtls (
-    CUST_ID INT NOT NULL AUTO_INCREMENT,
-    PRIMARY KEY (CUST_ID)
+    CUST_ID     INT          NOT NULL AUTO_INCREMENT,
+    FIRST_NAME  VARCHAR(45)  NOT NULL,
+    LAST_NAME   VARCHAR(45)  NOT NULL,
+    CONTACT_NUM VARCHAR(45)  NOT NULL,
+    EMAIL       VARCHAR(100) NULL,
+    USER_ID     INT          NULL,
+    IS_ADMIN    TINYINT(1)   NOT NULL DEFAULT 0,
+    STATUS_CODE VARCHAR(20)  NULL DEFAULT 'PENDING',
+    CRE_DTTM    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UPD_DTTM    DATETIME     NULL,
+    PRIMARY KEY (CUST_ID),
+    KEY idx_cust_contact (CONTACT_NUM)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ----------------------------------------------------------------------------

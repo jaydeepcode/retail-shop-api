@@ -94,7 +94,31 @@ INSERT IGNORE INTO rc_setting (SETTING_KEY, SETTING_VALUE, VALUE_TYPE, DESCRIPTI
     ('surcharge.default.tv', '10.00', 'DECIMAL',
      'Default shop surcharge on a DTH/TV recharge, in rupees; editable per line'),
     ('surcharge.default.mobile', '0.00', 'DECIMAL',
-     'Default shop surcharge on a mobile recharge; zero by decision, log 15.11');
+     'Default shop surcharge on a mobile recharge; zero by decision, log 15.11'),
+
+    -- ⚠ THE "FLAG" log 2.6 ASSUMES, WHICH DID NOT EXIST. 2.6 decides that three
+    -- rs_cust_dtls rows are not customers -- 269 Janata Sahakari Bank, 409 Hdfc
+    -- Bank, 323 Bankof India4425, Rs 49,211 between them -- and says "the three
+    -- are flagged as non-customers so the credit book filters them out". No
+    -- migration ever added a flag, and rs_cust_dtls has no column for one.
+    --
+    -- A setting rather than a column, for two reasons. Adding a column to
+    -- rs_cust_dtls means an UPDATE against the book of record to set it, which is
+    -- S6's remit; and the list is configuration of the same kind as
+    -- bank.default.account (log 9.3), which 9.3 already decided belongs in
+    -- rc_setting rather than in code.
+    --
+    -- Their origin, confirmed: the legacy app had no concept of a UPI receipt, so
+    -- when cash was not in the drawer because it had gone to the bank, the amount
+    -- was recorded against a "customer" named after the bank. 996 CRDT lines point
+    -- at 269 and are UPI markers, not credit. Going forward UPI Clearing handles
+    -- this properly, so the list is closed and should never grow.
+    --
+    -- ⚠ These rows must NOT be deleted: those 996 rows are the only recoverable
+    -- record of which historical sales were UPI rather than cash, and V13's
+    -- backfill reads them to derive the historical payment method (log 9.4).
+    ('credit.ledger.customers', '269,323,409', 'STRING',
+     'Comma-separated rs_cust_dtls CUST_IDs that are ledger accounts, not people');
 
 -- ============================================================================
 -- 3. rc_operator_preset -- the measured amounts (log §14.10)
@@ -259,5 +283,61 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 --
 -- Both are recorded in the README as outstanding, with V17 named, rather than
 -- silently dropped.
+
+-- ============================================================================
+-- 5. DEFAULT_ROUTE_CODE for the operators with no direct connection
+-- ============================================================================
+-- ⚠ ALSO TAKEN FROM A CUTOVER MIGRATION, and without it 37% of recharges fail
+-- at the counter on day one. V10 seeds DEFAULT_ROUTE_CODE = 'DIRECT' for every
+-- operator, and its own header says why: "V16 is what repoints the operators the
+-- client routes through A1." V16 is cutover work behind V13/V14.
+--
+-- What that leaves, measured against V25's seeded rates:
+--
+--   ARTL, RJIO, VI   DIRECT and A1TOPUP rates both seeded  -> DIRECT is right
+--   BSNL             A1TOPUP only                          -> DIRECT is WRONG
+--   DISHTV, VIDCTV,  A1TOPUP only                          -> DIRECT is WRONG
+--   AIRLTV, TATASKY,
+--   BIGTV
+--
+-- So a BSNL or TV recharge taken today would default to DIRECT and then fail
+-- twice over at the completion post: no rate row, so log 8.2 refuses the income
+-- leg; and the float account derives to FLOAT_BSNL or FLOAT_DISHTV, neither of
+-- which exists, because the shop holds FOUR wallets and the derivation
+-- CONCAT('FLOAT_', OPERATOR_CODE) only applies on the DIRECT route (log 15.1).
+--
+-- log 14.6 states the rule plainly: "The default stays per operator, never
+-- globally DIRECT: BSNL plus all five TV operators have no direct connection,
+-- which is 382 of 1,037 FY recharges (37%). A global DIRECT default would send
+-- every one of them into 8.2's refusal." 2.4:86 gives BSNL no direct connection
+-- at all. This is that rule applied to the data rather than a new decision.
+--
+-- Derived from the seeded rates rather than listed by hand, so the two cannot
+-- drift: an operator whose only open rate row is on A1TOPUP routes through
+-- A1TOPUP. If a DIRECT rate is ever added for BSNL, re-running this logic would
+-- leave it alone -- which is correct, because by then it would have a direct
+-- connection.
+UPDATE rc_operator o
+   SET o.DEFAULT_ROUTE_CODE = 'A1TOPUP'
+ WHERE o.IS_ACTIVE = TRUE
+   AND o.DEFAULT_ROUTE_CODE = 'DIRECT'
+   AND NOT EXISTS (
+       SELECT 1 FROM acc_commission_rate r
+        WHERE r.OPERATOR_CODE = o.OPERATOR_CODE
+          AND r.ROUTE_CODE = 'DIRECT'
+          AND r.EFFECTIVE_TO IS NULL
+   )
+   AND EXISTS (
+       SELECT 1 FROM acc_commission_rate r
+        WHERE r.OPERATOR_CODE = o.OPERATOR_CODE
+          AND r.ROUTE_CODE = 'A1TOPUP'
+          AND r.EFFECTIVE_TO IS NULL
+   );
+
+-- ⚠ V16 MUST NOT REDO THIS. Its own row in 6.3 ends with "insert A1TOPUP as
+-- active and set it as DEFAULT_ROUTE_CODE for the operators the client routes
+-- through A1". A1TOPUP is already active (V9 seeds it, so V15's backfill can
+-- foreign-key it), and the defaults are set here. V16 keeps the SARAVATE
+-- retirement and the rc_opt_sw updates, which are about history.
 
 SELECT 'V28: complete.' AS Status;

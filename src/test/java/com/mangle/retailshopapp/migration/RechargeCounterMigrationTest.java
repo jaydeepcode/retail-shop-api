@@ -161,8 +161,12 @@ class RechargeCounterMigrationTest {
         assertEquals("0.00", string("SELECT SETTING_VALUE FROM rc_setting "
                         + "WHERE SETTING_KEY = 'surcharge.default.mobile'"),
                 "stated rather than absent, so a zero is checkable");
-        assertEquals(8, count("SELECT COUNT(*) FROM rc_setting"),
-                "V9's six plus V28's two");
+        assertEquals("269,323,409", string("SELECT SETTING_VALUE FROM rc_setting "
+                        + "WHERE SETTING_KEY = 'credit.ledger.customers'"),
+                "the three bank pseudo-customers log §2.6 says the credit book must "
+                        + "filter out — it assumed a flag that no migration ever added");
+        assertEquals(9, count("SELECT COUNT(*) FROM rc_setting"),
+                "V9's six plus V28's three");
 
         // The ledger is not open until the opening journal posts, and the
         // ABSENCE of this key is how the system knows (log §12). V28 must not
@@ -221,7 +225,67 @@ class RechargeCounterMigrationTest {
     }
 
     // ------------------------------------------------------------------
-    // 4. rc_credit_req
+    // 4. The default routes
+    // ------------------------------------------------------------------
+
+    @Test
+    @Order(10)
+    @DisplayName("operators with no DIRECT rate default to A1TOPUP, not DIRECT")
+    void defaultRoutes() {
+        // Without this, 37% of recharges fail at the completion post on day one:
+        // no rate row (log §8.2 refuses the income leg) AND a derived float
+        // account that does not exist, because CONCAT('FLOAT_', OPERATOR_CODE)
+        // only applies on the DIRECT route and the shop holds four wallets.
+        for (String operator : List.of("BSNL", "DISHTV", "VIDCTV", "AIRLTV", "TATASKY", "BIGTV")) {
+            assertEquals("A1TOPUP", string("SELECT DEFAULT_ROUTE_CODE FROM rc_operator "
+                            + "WHERE OPERATOR_CODE = '" + operator + "'"),
+                    operator + " has no direct connection (log §14.6, §2.4:86)");
+        }
+
+        // The three that DO have one keep it: both rates are seeded for them, and
+        // §14.9's float consumption shows all three per-operator wallets carrying
+        // real volume.
+        for (String operator : List.of("ARTL", "RJIO", "VI")) {
+            assertEquals("DIRECT", string("SELECT DEFAULT_ROUTE_CODE FROM rc_operator "
+                            + "WHERE OPERATOR_CODE = '" + operator + "'"),
+                    operator + " has a direct connection and a DIRECT rate");
+        }
+    }
+
+    @Test
+    @Order(11)
+    @DisplayName("every selectable operator's default route has an open rate AND a float account")
+    void everyDefaultIsPostable() {
+        // The assertion that actually matters, because it is the one the counter
+        // depends on: for each operator the picker may offer, the pair
+        // (operator, default route) must resolve to both a rate and an existing
+        // float account. §8.2 part 1 calls a miss "structurally near-impossible";
+        // this is what makes that true rather than hoped for.
+        List<String> unpostable = strings(
+                "SELECT CONCAT(o.OPERATOR_CODE, '/', o.DEFAULT_ROUTE_CODE, ' ', "
+                + "       CASE WHEN r.RATE_ID IS NULL THEN '[no rate]' ELSE '' END, "
+                + "       CASE WHEN a.ACCOUNT_CODE IS NULL THEN '[no float account]' ELSE '' END) "
+                + "  FROM rc_operator o "
+                + "  LEFT JOIN acc_commission_rate r "
+                + "         ON r.OPERATOR_CODE = o.OPERATOR_CODE "
+                + "        AND r.ROUTE_CODE = o.DEFAULT_ROUTE_CODE "
+                + "        AND r.EFFECTIVE_TO IS NULL "
+                + "  LEFT JOIN acc_account a "
+                + "         ON a.ACCOUNT_CODE = IF(o.DEFAULT_ROUTE_CODE = 'A1TOPUP', "
+                + "                                'FLOAT_A1TOPUP', "
+                + "                                CONCAT('FLOAT_', o.OPERATOR_CODE)) "
+                + "        AND a.IS_ACTIVE = TRUE "
+                + " WHERE o.IS_ACTIVE = TRUE "
+                + "   AND o.OPERATOR_CODE NOT LIKE '%_UNKNOWN' "
+                + "   AND (r.RATE_ID IS NULL OR a.ACCOUNT_CODE IS NULL)");
+
+        assertEquals(List.of(), unpostable,
+                "every operator the counter can offer must post cleanly; these cannot: "
+                        + unpostable);
+    }
+
+    // ------------------------------------------------------------------
+    // 5. rc_credit_req
     // ------------------------------------------------------------------
 
     @Test
