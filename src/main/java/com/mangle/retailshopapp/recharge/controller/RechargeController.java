@@ -3,12 +3,15 @@ package com.mangle.retailshopapp.recharge.controller;
 import java.net.URI;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,25 +26,36 @@ import org.springframework.validation.annotation.Validated;
 import com.mangle.retailshopapp.customer.model.CustomerDetails;
 import com.mangle.retailshopapp.recharge.domain.FinancialYear;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
-import com.mangle.retailshopapp.recharge.exception.PaymentNotFound;
+import com.mangle.retailshopapp.recharge.domain.Outstanding;
+import com.mangle.retailshopapp.recharge.domain.ServiceType;
 import com.mangle.retailshopapp.recharge.model.RcOperator;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.request.MarkCompleteRequest;
 import com.mangle.retailshopapp.recharge.model.request.MarkFailedRequest;
+import com.mangle.retailshopapp.recharge.model.request.CreateCustomerRequest;
 import com.mangle.retailshopapp.recharge.model.request.SettleBasketRequest;
 import com.mangle.retailshopapp.recharge.model.request.VoidRechargeRequest;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse.OperatorConfig;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse.RouteConfig;
+import com.mangle.retailshopapp.recharge.model.response.CreateCustomerRequestResult;
+import com.mangle.retailshopapp.recharge.model.response.CreditCustomerResponse;
+import com.mangle.retailshopapp.recharge.model.response.DaySummaryResponse;
+import com.mangle.retailshopapp.recharge.model.response.HistoryPageResponse;
+import com.mangle.retailshopapp.recharge.model.response.NumberHintResponse;
 import com.mangle.retailshopapp.recharge.model.response.PageResponse;
+import com.mangle.retailshopapp.recharge.model.response.TvConnectionResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeWorkItemResponse;
 import com.mangle.retailshopapp.recharge.model.response.TransactionResponse;
 import com.mangle.retailshopapp.recharge.repo.RechargeOpenItemsRepository;
+import com.mangle.retailshopapp.recharge.service.CounterEntryService;
+import com.mangle.retailshopapp.recharge.service.CreditLedgerService;
 import com.mangle.retailshopapp.recharge.service.CustomerDirectoryService;
 import com.mangle.retailshopapp.recharge.service.FinancialYears;
 import com.mangle.retailshopapp.recharge.service.OperatorConfigService;
 import com.mangle.retailshopapp.recharge.service.RechargeFulfilmentService;
+import com.mangle.retailshopapp.recharge.service.RechargeHistoryService;
 import com.mangle.retailshopapp.recharge.service.RechargeResponseMapper;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedRecharge;
@@ -53,6 +67,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.security.Principal;
@@ -82,11 +97,10 @@ import java.security.Principal;
  * straight from a controller with no service and no transaction. Nothing here
  * writes.
  *
- * <p><b>This slice ships 8 of §3.2's 19 endpoints.</b> The settle-and-complete
- * core plus the worklist, which is what makes the counter usable and the ledger
- * exercisable. The credit book, history, day summary, retry, refund, the TV and
- * customer searches and the number hint are specified and not yet built; each one
- * is listed in the PR rather than left to be discovered.
+ * <p><b>This slice ships 15 of §3.2's 19 endpoints.</b> Everything the counter,
+ * the worklist, history and the end-of-day read need. The four left are the
+ * failure-resolution pair (#12 retry, #13 refund) and the credit book (#14-#16),
+ * each listed in the PR rather than left to be discovered.
  */
 @RestController
 @RequestMapping("/recharge")
@@ -95,6 +109,9 @@ public class RechargeController {
 
     private final RechargeSettlementService settlement;
     private final RechargeFulfilmentService fulfilment;
+    private final CounterEntryService entry;
+    private final RechargeHistoryService historyService;
+    private final CreditLedgerService credit;
     private final OperatorConfigService config;
     private final CustomerDirectoryService customers;
     private final RechargeResponseMapper mapper;
@@ -105,6 +122,9 @@ public class RechargeController {
 
     public RechargeController(RechargeSettlementService settlement,
                               RechargeFulfilmentService fulfilment,
+                              CounterEntryService entry,
+                              RechargeHistoryService historyService,
+                              CreditLedgerService credit,
                               OperatorConfigService config,
                               CustomerDirectoryService customers,
                               RechargeResponseMapper mapper,
@@ -114,6 +134,9 @@ public class RechargeController {
                               Clock clock) {
         this.settlement = settlement;
         this.fulfilment = fulfilment;
+        this.entry = entry;
+        this.historyService = historyService;
+        this.credit = credit;
         this.config = config;
         this.customers = customers;
         this.mapper = mapper;
@@ -213,21 +236,30 @@ public class RechargeController {
             // 200; anything else is a genuine integrity failure and is rethrown
             // for the handler, which must not report a constraint as a success.
             return settlement.replayedPaymentId(idempotencyKey)
-                    .map(paymentId -> ResponseEntity.ok(transaction(paymentId)))
+                    .map(paymentId -> ResponseEntity.ok(transaction(paymentId, principal)))
                     .orElseThrow(() -> e);
         }
     }
 
-    /** The whole visit (#7). */
+    /**
+     * The whole visit (#7): the payment, its recharges with current statuses, and
+     * its tenders.
+     *
+     * <p>Not year-scoped, and it must not be: a payment id is an exact reference,
+     * and refusing to show last year's visit because the picker sits on this year
+     * is the stored-mode failure §9.3 forbids.
+     *
+     * <p>This is also the REPLAY path's return. A duplicate
+     * {@code Idempotency-Key} resolves to a payment id and comes back through
+     * here, which is why it has to be a real read rather than a stub — a partial
+     * response would make a replayed settle look like a successful one with no
+     * recharges on it.
+     */
     @GetMapping("/transactions/{paymentId}")
-    public TransactionResponse transaction(@PathVariable int paymentId) {
-        // ⚠ NOT IMPLEMENTED IN THIS SLICE, and it throws rather than returning a
-        // half-built response. The read needs the header, its tenders and the
-        // credit summary reassembled, which is RechargeHistoryService's job — and
-        // that service is not in this slice. Returning an empty or partial
-        // TransactionResponse would make a replayed settle look like a successful
-        // one with no recharges on it, which is worse than a clear failure.
-        throw new PaymentNotFound(paymentId);
+    public TransactionResponse transaction(@PathVariable int paymentId, Principal principal) {
+        var visit = historyService.visit(paymentId);
+        return mapper.toVisit(visit, principal == null ? null : principal.getName(),
+                LocalDate.now(clock));
     }
 
     // ------------------------------------------------------------------
@@ -323,6 +355,156 @@ public class RechargeController {
                                          Principal principal) {
         return mapper.toRecharge(
                 fulfilment.voidRecharge(rechargeId, request.reason(), staffIdOf(principal)));
+    }
+
+    // ------------------------------------------------------------------
+    // #2, #3 — the entry step
+    // ------------------------------------------------------------------
+
+    /**
+     * Operator and route prefill from this number's last recharge (#2).
+     *
+     * <p>Earns its place on measurement: 88.5% of mobile and 93.6% of TV
+     * recharges go to a number seen before (log §14.10). Returns 200 with
+     * {@code known:false} rather than a 404 for an unseen number — which is EVERY
+     * number until V15's backfill runs, so the commonest case on day one must not
+     * look like a failure.
+     */
+    @GetMapping("/number-hints/{serviceType}/{number}")
+    public NumberHintResponse numberHint(
+            @PathVariable ServiceType serviceType,
+            @PathVariable @NotBlank @Size(max = 20) String number) {
+        return NumberHintResponse.from(entry.hintFor(serviceType, number.trim()));
+    }
+
+    /** TV connection search by name, contact or connection number (#3). */
+    @GetMapping("/tv-connections")
+    public List<TvConnectionResponse> tvConnections(
+            @RequestParam @Size(min = 2, max = 64) String query,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
+        return entry.searchConnections(query, limit).stream()
+                .map(TvConnectionResponse::from)
+                .toList();
+    }
+
+    // ------------------------------------------------------------------
+    // #4, #5 — the credit customer
+    // ------------------------------------------------------------------
+
+    /**
+     * Customer search for a credit sale (#4).
+     *
+     * <p>⚠ ALL customers, not water-only, and ledger accounts excluded. And the
+     * outstanding figure is CROSS-BUSINESS (log §14.8): scoped to recharge,
+     * someone owing ₹2,000 on water and ₹49 on recharge would show as ₹49, so the
+     * warn flag — the entire reason this panel exists — would understate the
+     * exposure while looking authoritative.
+     */
+    @GetMapping("/customers")
+    public List<CreditCustomerResponse> searchCustomers(
+            @RequestParam @Size(min = 2, max = 64) String query,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
+        LocalDate today = LocalDate.now(clock);
+        int warnDays = config.creditWarningDays();
+
+        return customers.search(query, limit).stream()
+                .map(c -> CreditCustomerResponse.from(c, credit.positionOf(c.getCustId()),
+                        today, warnDays))
+                .toList();
+    }
+
+    /**
+     * Create a walk-in inline (#5).
+     *
+     * <p>A mobile already on file is a 409 carrying the EXISTING customer id, so
+     * the staff member can use the person who is already there rather than
+     * creating a duplicate someone has to merge later (§3.2). A bare 409 would
+     * leave them stuck with a customer in front of them.
+     */
+    @PostMapping("/customers")
+    public ResponseEntity<?> createCustomer(@Valid @RequestBody CreateCustomerRequest request) {
+        var existing = customers.findByMobile(request.mobile());
+        if (existing.isPresent()) {
+            CustomerDetails c = existing.get();
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                    new CreateCustomerRequestResult(c.getCustId(), c.getCustomerName(),
+                            c.getContactNum()));
+        }
+
+        CustomerDetails created = customers.createWalkIn(request.firstName(), request.lastName(),
+                request.mobile(), LocalDateTime.now(clock));
+
+        return ResponseEntity
+                .created(URI.create("/recharge/customers/" + created.getCustId()))
+                .body(CreditCustomerResponse.from(created, Outstanding.clear(),
+                        LocalDate.now(clock), config.creditWarningDays()));
+    }
+
+    // ------------------------------------------------------------------
+    // #17, #18 — history and end of day
+    // ------------------------------------------------------------------
+
+    /**
+     * History search (#17).
+     *
+     * <p>⚠ {@code status} HERE IS THE STORED STATUS, not the wire pair. Filtering
+     * for unresolved failures is {@code status=FAILED}; a retried one is
+     * {@code status=RETRIED}. The response still SURFACES the pair, because §3.3's
+     * contract has two fields — see {@code FailureResolution}.
+     */
+    @GetMapping("/history")
+    public HistoryPageResponse history(
+            @RequestParam(required = false) @Pattern(regexp = "^\\d{4}-\\d{2}$",
+                    message = "a financial year looks like 2026-27") String financialYear,
+            @RequestParam(required = false) @Size(max = 20) String number,
+            @RequestParam(required = false) @Size(max = 20) String operatorCode,
+            @RequestParam(required = false) @Size(max = 20) String routeCode,
+            @RequestParam(required = false) RechargeStatus status,
+            @RequestParam(required = false) Integer staffId,
+            @RequestParam(required = false) @Size(max = 64) String reference,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+
+        var result = historyService.search(financialYear, number, operatorCode, routeCode,
+                status, staffId, reference, PageRequest.of(page, size));
+
+        FinancialYear fy = result.financialYear();
+        return new HistoryPageResponse(
+                fy.label(),
+                fy.startDate(),
+                fy.endDate(),
+                historyService.dataAvailableFrom(),
+                PageResponse.of(result.page().map(mapper::toRecharge)));
+    }
+
+    /**
+     * End of day (#18) — what the slice's gate compares to the drawer.
+     *
+     * <p>A read, not an action. §3.2: there is deliberately no
+     * {@code POST /recharge/day-close}, because requirement 8 asks for a warning
+     * and never a block — a day-close resource would create closed/open day
+     * state, a reopen endpoint and a rule about posting into a closed day.
+     */
+    @GetMapping("/day-summary")
+    public DaySummaryResponse daySummary(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+
+        var summary = historyService.daySummary(date);
+
+        return new DaySummaryResponse(
+                summary.date(),
+                summary.takings().stream()
+                        .map(t -> new DaySummaryResponse.TakingsRow(t.operatorCode(),
+                                t.routeCode(), t.count(), t.amount(), t.surcharge()))
+                        .toList(),
+                summary.totalTakings(),
+                summary.totalSurcharge(),
+                summary.tenderMix().entrySet().stream().collect(java.util.stream.Collectors.toMap(
+                        e -> e.getKey().name(), Map.Entry::getValue)),
+                summary.awaitingCount(),
+                summary.unresolvedFailureCount(),
+                summary.heldPending());
     }
 
     // ------------------------------------------------------------------

@@ -11,11 +11,15 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.mangle.retailshopapp.credit.model.RcTxnHeader;
 import com.mangle.retailshopapp.customer.model.CustomerDetails;
+import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
 import com.mangle.retailshopapp.recharge.domain.FinancialYear;
+import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.model.RcOperator;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
+import com.mangle.retailshopapp.recharge.model.RcTxnPayment;
 import com.mangle.retailshopapp.recharge.model.RefRechargeRoute;
 import com.mangle.retailshopapp.recharge.model.response.CreditSummaryResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeResponse;
@@ -24,6 +28,8 @@ import com.mangle.retailshopapp.recharge.model.response.SettlementLineResponse;
 import com.mangle.retailshopapp.recharge.model.response.TransactionResponse;
 import com.mangle.retailshopapp.recharge.repo.RcOperatorRepository;
 import com.mangle.retailshopapp.recharge.repo.RefRechargeRouteRepository;
+import com.mangle.retailshopapp.user.model.User;
+import com.mangle.retailshopapp.user.repo.UserRepository;
 
 /**
  * Hand-written mapping (design-api.md §6.1).
@@ -49,15 +55,24 @@ public class RechargeResponseMapper {
     private final RefRechargeRouteRepository routes;
     private final OperatorConfigService config;
     private final FinancialYears financialYears;
+    private final CustomerDetailsRepository customers;
+    private final CreditLedgerService credit;
+    private final UserRepository users;
 
     public RechargeResponseMapper(RcOperatorRepository operators,
                                   RefRechargeRouteRepository routes,
                                   OperatorConfigService config,
-                                  FinancialYears financialYears) {
+                                  FinancialYears financialYears,
+                                  CustomerDetailsRepository customers,
+                                  CreditLedgerService credit,
+                                  UserRepository users) {
         this.operators = operators;
         this.routes = routes;
         this.config = config;
         this.financialYears = financialYears;
+        this.customers = customers;
+        this.credit = credit;
+        this.users = users;
     }
 
     @Transactional(readOnly = true)
@@ -106,6 +121,92 @@ public class RechargeResponseMapper {
     public Map<String, RcOperator> operatorsByCode() {
         return operators.findAll().stream()
                 .collect(Collectors.toMap(RcOperator::getOperatorCode, Function.identity()));
+    }
+
+    /**
+     * One visit read back from the database (#7).
+     *
+     * <p>⚠ THE TENDER AND THE CHANGE COME FROM THE HEADER, not from the tender
+     * rows. {@code rc_txn_payment} has no tendered/change pair — the tender
+     * belongs to the BASKET, because there is one drawer and one hand-over
+     * whatever the basket holds — so {@code amt_tndred} and {@code amt_returned}
+     * are what reconstruct the cash line's figures. A reader of the settle
+     * response reasonably expects columns that do not exist.
+     *
+     * <p>⚠ AND THE FIGURES ARE THE RECORDED ONES, not recomputed. A settle
+     * response reports what {@code SettlementPlan} just calculated; this reports
+     * what was actually written seven months ago, under whatever the rules were
+     * then. Recomputing would quietly re-price history the first time a setting
+     * changed — the same hazard §4.1 names for commission rates.
+     */
+    @Transactional(readOnly = true)
+    public TransactionResponse toVisit(RechargeHistoryService.Visit visit, String staffUsername,
+                                       LocalDate today) {
+        RcTxnHeader header = visit.header();
+        BigDecimal threshold = config.changeDisplayThreshold();
+        BigDecimal changeGiven = header.getAmtReturned();
+
+        CustomerDetails creditCustomer = header.getCustId() == null
+                ? null
+                : customers.findById(header.getCustId().longValue()).orElse(null);
+
+        List<SettlementLineResponse> lines = new ArrayList<>(visit.tenders().size());
+        BigDecimal totalSurcharge = BigDecimal.ZERO.setScale(2);
+        for (RcRecharge r : visit.recharges()) {
+            totalSurcharge = totalSurcharge.add(r.getSurcharge());
+        }
+
+        for (RcTxnPayment tender : visit.tenders()) {
+            SettlementMethod method = SettlementMethod.fromLineType(tender.getLineType());
+            boolean isCash = method.carriesTender();
+            lines.add(new SettlementLineResponse(
+                    tender.getId().getSeqNo(),
+                    method,
+                    tender.getAmount(),
+                    isCash ? header.getAmtTndred() : null,
+                    isCash ? changeGiven : null,
+                    isCash && changeGiven.signum() > 0
+                            && changeGiven.compareTo(threshold) >= 0,
+                    tender.getReferenceNo(),
+                    header.getCustId(),
+                    creditCustomer == null ? null : creditCustomer.getCustomerName(),
+                    // Who extended the credit, read from the row rather than from
+                    // the caller: this is a historical fact, and §3.5 makes that
+                    // record the whole authorisation control.
+                    tender.getExtendedBy() == null ? null
+                            : users.findById(tender.getExtendedBy().longValue())
+                                    .map(User::getUsername).orElse(null),
+                    tender.getNote()));
+        }
+
+        CreditSummaryResponse creditSummary = null;
+        if (header.getCustId() != null) {
+            creditSummary = CreditSummaryResponse.from(
+                    header.getCustId(),
+                    creditCustomer == null ? null : creditCustomer.getCustomerName(),
+                    // What this visit put on the tab, not the whole balance.
+                    visit.tenders().stream()
+                            .filter(t -> SettlementMethod.CREDIT.lineType().equals(t.getLineType()))
+                            .map(RcTxnPayment::getAmount)
+                            .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add),
+                    credit.positionOf(header.getCustId()),
+                    today,
+                    config.creditWarningDays());
+        }
+
+        return new TransactionResponse(
+                header.getTxnId(),
+                "P-" + header.getTxnId(),
+                header.getTxnDttm(),
+                staffUsername,
+                financialYears.of(header.getTxnDttm().toLocalDate()).label(),
+                header.getTxnTotalAmt(),
+                totalSurcharge,
+                header.getAmtTndred(),
+                changeGiven,
+                toRecharges(visit.recharges()),
+                lines,
+                creditSummary);
     }
 
     /**

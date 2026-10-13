@@ -1,6 +1,7 @@
 package com.mangle.retailshopapp.recharge.service;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -93,7 +94,30 @@ class RechargeLedgerPostingsTest {
         registry.add("spring.flyway.out-of-order", () -> "false");
     }
 
-    private static final LocalDateTime WHEN = LocalDateTime.of(2026, 10, 12, 18, 4, 11);
+    /**
+     * ⚠ DERIVED FROM TODAY, NOT HARDCODED, and the reason is a failure this test
+     * actually had.
+     *
+     * <p>It was pinned to {@code 2026-10-12 18:04:11} and passed — until the next
+     * day, when every completion test broke with "Bsnl has no commission rate on
+     * file". V25 seeds {@code EFFECTIVE_FROM = CURDATE()}, which is the
+     * migration's own run date and deliberate (log §12: the go-live date must not
+     * be baked in at build time). The container runs the migration today, so a
+     * recharge dated yesterday falls BEFORE the rate's effective date and §4.2's
+     * lookup correctly returns nothing.
+     *
+     * <p>The lookup is right and the fixture was wrong: §4.2 is explicit that the
+     * rate must be found as of {@code :rechargeDate} rather than
+     * {@code CURDATE()}, because "a recharge entered a day late must use the rate
+     * that applied on the day it happened".
+     *
+     * <p>Worth carrying into the cutover: a recharge dated before the rate rows
+     * exist has no rate, so V15's backfilled history could never post an income
+     * voucher. That is fine today — the ledger is not authoritative for recharge
+     * until the legacy writer retires (risk R1) and nothing posts those rows —
+     * but it is a real constraint on any future attempt to post history.
+     */
+    private static final LocalDateTime WHEN = LocalDate.now().atTime(18, 4, 11);
 
     @Autowired
     private RechargeLedgerPostings postings;
