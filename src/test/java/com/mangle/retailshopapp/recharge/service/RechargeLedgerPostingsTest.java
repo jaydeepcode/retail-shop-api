@@ -32,6 +32,7 @@ import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan.RechargeLine;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan.SettlementLine;
+import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
 import com.mangle.retailshopapp.recharge.exception.NoCommissionRateException;
 import com.mangle.retailshopapp.recharge.model.RcOperator;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
@@ -433,11 +434,21 @@ class RechargeLedgerPostingsTest {
                     "147.00", "0.00");
             RcOperator bsnl = operators.findById("BSNL").orElseThrow();
 
-            IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
-                    postings.postCompletion(recharge, bsnl, direct, staffUserId, WHEN));
+            // ⚠ A 422, not an IllegalStateException. This test asserted the latter
+            // until review finding 13: an IllegalStateException falls through to
+            // the catch-all handler, so the counter received
+            // "An unexpected error occurred." and the carefully-written message
+            // existed only in the server log — on the one failure a staff member
+            // can act on, by choosing a different route.
+            FloatAccountNotDerivableException ex = assertThrows(
+                    FloatAccountNotDerivableException.class, () ->
+                            postings.postCompletion(recharge, bsnl, direct, staffUserId, WHEN));
 
-            assertTrue(ex.getMessage().contains("FLOAT_BSNL"), ex.getMessage());
-            assertTrue(ex.getMessage().contains("no connection on"), ex.getMessage());
+            assertEquals(422, ex.status());
+            assertTrue(ex.getMessage().contains("BSNL"), ex.getMessage());
+            assertTrue(ex.getMessage().contains("A1 Topup"), "it says what to do instead");
+            assertEquals("FLOAT_BSNL", ex.details().get("derivedAccount"),
+                    "and names the wallet the derivation invented");
 
             // ⚠ AND IT MUST NOT BE THE RATE ERROR. BSNL on DIRECT has neither a
             // wallet nor a rate, so whichever check runs first decides the

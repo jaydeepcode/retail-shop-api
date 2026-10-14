@@ -49,7 +49,8 @@ public class RefRechargeRoute {
     private LocalDate retiredOn;
 
     /**
-     * The float account this route consumes, given an operator (log §15.1).
+     * The float account this route consumes, given an operator (log §15.1), or
+     * {@code null} when this route has no derivation.
      *
      * <p>Derived rather than looked up: §2.4 anticipated a mapping table and the
      * owner confirmed there is none, because the account is computable from the
@@ -57,8 +58,29 @@ public class RefRechargeRoute {
      * previously generated was wrong in both directions — six accounts for float
      * the shop does not hold, and no account at all for A1Topup, the largest one
      * it does.
+     *
+     * <p>⚠ IT RETURNS NULL RATHER THAN GUESSING, and that is a fix. §15.1 gives
+     * exactly two rules — {@code A1TOPUP} to the shared wallet, {@code DIRECT} to
+     * the operator's own — and this method used to send everything else down the
+     * {@code DIRECT} branch. {@code SARAVATE} is the route that made that
+     * dangerous: V9 seeds it ACTIVE (V15's backfill foreign-keys it, and V16 is
+     * what retires it), and {@code markCompleted} accepts any active route as an
+     * override. So completing an Airtel recharge on {@code SARAVATE} credited
+     * {@code FLOAT_ARTL} — an account that EXISTS, so the posting's
+     * account-existence check passed and the voucher posted to the wrong wallet
+     * with no error at all.
+     *
+     * <p>The two routes with no held wallet failed loudly; this one failed
+     * quietly, which is worse. Historically {@code SARAVATE} was an A1Topup
+     * stand-in (§8.5), but inferring that here would be guessing at money: a new
+     * sale should not be on that route in the first place, and the caller refuses
+     * it with a message that says so.
      */
     public String floatAccountFor(String operatorCode) {
-        return "A1TOPUP".equals(code) ? "FLOAT_A1TOPUP" : "FLOAT_" + operatorCode;
+        return switch (code) {
+            case "A1TOPUP" -> "FLOAT_A1TOPUP";
+            case "DIRECT" -> "FLOAT_" + operatorCode;
+            default -> null;
+        };
     }
 }

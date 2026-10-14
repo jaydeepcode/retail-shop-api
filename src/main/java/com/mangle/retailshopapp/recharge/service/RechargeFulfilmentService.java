@@ -101,9 +101,9 @@ public class RechargeFulfilmentService {
         assertLegal(recharge, RechargeStatus.COMPLETED);
 
         if (routeCode != null && !routeCode.equals(recharge.getRouteCode())) {
-            // Validated, not trusted: an unknown route is a 404 and a route the
-            // operator has no connection on fails loudly at the posting step
-            // with a message that says so.
+            // An OVERRIDE is a new choice being made now, so it must be a route
+            // the shop still uses — unlike the recharge's existing route, which
+            // only has to have been valid when the sale was taken.
             config.requireActiveRoute(routeCode);
             recharge.setRouteCode(routeCode);
         }
@@ -117,8 +117,20 @@ public class RechargeFulfilmentService {
         // Stage two of the posting (log §7.2). Inside this transaction, and the
         // pessimistic lock taken above is what serialises two terminals
         // completing the same recharge.
-        var operator = config.requireSelectable(recharge.getOperatorCode());
-        var route = config.requireActiveRoute(recharge.getRouteCode());
+        //
+        // ⚠ requireKnown, NOT requireSelectable, and the difference traps money.
+        // requireSelectable applies the PICKER's rule — active, not a sentinel —
+        // which is right for a new sale and wrong for one already taken. A
+        // recharge settled before its operator or route was retired would
+        // otherwise be uncompletable forever, with its cash stranded in
+        // RCHG_PENDING and no exit but a refund this slice has not built. V20
+        // retired IDEA and VDFN mid-project and V16 will retire SARAVATE, so this
+        // is a scheduled event rather than a hypothetical.
+        //
+        // The operator is read only for its display name in the rate-refusal
+        // message, so the stricter check bought nothing here even when it passed.
+        var operator = config.requireKnown(recharge.getOperatorCode());
+        var route = config.requireKnownRoute(recharge.getRouteCode());
         ledger.postCompletion(recharge, operator, route, staffUserId, now);
 
         return recharge;
@@ -127,16 +139,18 @@ public class RechargeFulfilmentService {
     /**
      * Marks a recharge failed (§3.2 endpoint #10).
      *
-     * <p>⚠ NOTHING POSTS. That is log §7.2's single biggest saving: "the money
-     * simply stays in {@code RCHG_PENDING}. … the failure path is the common one,
-     * and it becomes free." A reversing entry would be needed only if income had
-     * been recognised at settlement, which is exactly the design that was
-     * rejected.
+     * <p>⚠ WHAT POSTS DEPENDS ON WHERE IT CAME FROM, and conflating the two was
+     * a defect. From {@code AWAITING_RECHARGE}, NOTHING posts — log §7.2's single
+     * biggest saving: "the money simply stays in {@code RCHG_PENDING} … the
+     * failure path is the common one, and it becomes free."
      *
-     * <p>Reachable from {@code COMPLETED} as well as {@code AWAITING_RECHARGE}
-     * (log §7.1): a recharge marked complete that the operator never delivered is
-     * routed into the existing {@code FAILED → RETRIED | REFUNDED} machinery
-     * rather than duplicating it.
+     * <p>But the transition is also reachable from {@code COMPLETED} (log §7.1):
+     * a recharge marked complete that the operator never delivered is routed into
+     * the existing {@code FAILED → RETRIED | REFUNDED} machinery rather than
+     * duplicating it. On THAT path stage two has already run, so the completion
+     * voucher is reversed — otherwise {@code INC_RCHG_COMM} and the float
+     * consumption would stay recognised for a recharge that did not happen, while
+     * the day summary dropped the sale from takings and reported nothing held.
      */
     @Transactional
     public RcRecharge markFailed(long rechargeId, String reason, Integer staffUserId) {
@@ -148,10 +162,23 @@ public class RechargeFulfilmentService {
         assertLegal(recharge, RechargeStatus.FAILED);
 
         LocalDateTime now = LocalDateTime.now(clock);
+        boolean wasCompleted = recharge.getStatusCode() == RechargeStatus.COMPLETED;
+
         if (reason != null && !reason.isBlank()) {
             recharge.setFailureReason(reason.trim());
         }
         apply(recharge, RechargeStatus.FAILED, staffUserId, reason, now);
+
+        // ⚠ FROM COMPLETED, THE INCOME HAS ALREADY BEEN RECOGNISED and has to be
+        // taken back. From AWAITING_RECHARGE nothing was posted, so this is a
+        // no-op — which is log §7.2's biggest saving and still holds for the
+        // common path. The two cases are not interchangeable, and the javadoc
+        // above used to claim the second for both.
+        if (wasCompleted) {
+            ledger.reverseCompletion(recharge, staffUserId,
+                    reason == null || reason.isBlank() ? "marked failed after completion" : reason,
+                    now);
+        }
         return recharge;
     }
 
@@ -170,14 +197,14 @@ public class RechargeFulfilmentService {
      * drawer, so only the COMPLETION voucher is reversed and the amount returns to
      * {@code RCHG_PENDING}, from where §7.4's residual mechanism settles it.
      *
-     * <p>⚠ THE REVERSAL ITSELF IS NOT IMPLEMENTED IN THIS SLICE. The status moves
-     * — which is what drops the sale out of takings, since the query filters on
-     * {@code COMPLETED} — but the correcting voucher needs
-     * {@code LedgerCorrectionRules} wired to a caller, and S2 left that
-     * outstanding ("the two service rules have no caller yet"). Raised in the PR
-     * rather than half-built: a status change with no reversal leaves the ledger
-     * overstating income, so this endpoint must not ship to the counter before the
-     * reversal does.
+     * <p>⚠ THE REVERSAL IS NOW POSTED, which it was not when this slice was first
+     * written. A status change alone left the ledger overstating income, because
+     * the status drops the sale out of takings while the completion voucher stays.
+     * {@link RechargeLedgerPostings#reverseCompletion} writes a dated reversing
+     * JOURNAL — the form FRD §8.3 mandates after a reconciliation point and which
+     * is correct before one too, so it does not wait on
+     * {@code LedgerCorrectionRules} choosing between a journal and a
+     * delete-and-repost.
      */
     @Transactional
     public RcRecharge voidRecharge(long rechargeId, String reason, Integer staffUserId) {
@@ -187,8 +214,12 @@ public class RechargeFulfilmentService {
         RcRecharge recharge = lockOrThrow(rechargeId);
         assertLegal(recharge, RechargeStatus.VOIDED);
 
-        apply(recharge, RechargeStatus.VOIDED, staffUserId, reason.trim(),
-                LocalDateTime.now(clock));
+        LocalDateTime now = LocalDateTime.now(clock);
+        apply(recharge, RechargeStatus.VOIDED, staffUserId, reason.trim(), now);
+
+        // VOIDED is reachable only from COMPLETED, so there is always a
+        // completion voucher to take back.
+        ledger.reverseCompletion(recharge, staffUserId, reason.trim(), now);
         return recharge;
     }
 

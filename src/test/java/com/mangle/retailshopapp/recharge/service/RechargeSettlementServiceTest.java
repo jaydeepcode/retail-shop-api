@@ -22,6 +22,7 @@ import com.mangle.retailshopapp.config.ClockConfig;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ServiceType;
 import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
+import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
 import com.mangle.retailshopapp.recharge.exception.LinesDoNotSumException;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedRecharge;
@@ -413,6 +414,163 @@ class RechargeSettlementServiceTest {
     }
 
     @Test
+    @DisplayName("⚠ failing a COMPLETED recharge reverses the income, and the money is held again")
+    void failAfterCompleteReverses() {
+        // FINDING 2. The transition is legal (log §7.1 - "recorded correctly but
+        // the operator never delivered"), and on that path stage two has already
+        // run. Without the reversal, INC_RCHG_COMM and the float consumption
+        // stayed recognised for a recharge that did not happen, while the day
+        // summary dropped the sale from takings and reported nothing held: Rs 210
+        // of cash reconciling to nothing at all.
+        var settled = settlement.settle(
+                List.of(tv("DISHTV", "200.00", null)),
+                List.of(cash("210.00", "210.00")),
+                staffUserId, "key-revfail-1");
+        long rechargeId = settled.recharges().get(0).getRechargeId();
+
+        fulfilment.markCompleted(rechargeId, null, null, staffUserId);
+        assertEquals("0.00", netOf("RCHG_PENDING", "CR_MINUS_DR"),
+                "the completion cleared the liability");
+        assertTrue(new java.math.BigDecimal(netOf("INC_RCHG_COMM", "CR_MINUS_DR")).signum() > 0,
+                "and recognised commission");
+
+        fulfilment.markFailed(rechargeId, "operator never delivered", staffUserId);
+
+        // The money is owed to the customer again.
+        assertEquals("210.00", netOf("RCHG_PENDING", "CR_MINUS_DR"),
+                "the full amount the customer paid is held once more");
+        assertEquals("0.00", netOf("INC_RCHG_COMM", "CR_MINUS_DR"),
+                "no commission is recognised for a recharge that did not happen");
+        assertEquals("0.00", netOf("INC_RCHG_SURCHARGE", "CR_MINUS_DR"));
+        assertEquals("0.00", netOf("FLOAT_A1TOPUP", "CR_MINUS_DR"),
+                "and the float was never really consumed");
+
+        // ⚠ The CASH leg is untouched: the customer genuinely paid.
+        assertEquals("210.00", netOf("CASH_RECHARGE", "DR_MINUS_CR"),
+                "a reversal never touches money the shop still holds");
+
+        // A dated JOURNAL that points at what it reverses, not an edit.
+        assertEquals("JOURNAL", scalar("SELECT VOUCHER_TYPE FROM acc_voucher "
+                + "WHERE IDEMPOTENCY_KEY = '"
+                + RechargeLedgerPostings.reversalKey(rechargeId) + "'"));
+        assertEquals(String.valueOf(voucherIdOf(RechargeLedgerPostings.completionKey(rechargeId))),
+                scalar("SELECT REVERSES_VOUCHER_ID FROM acc_voucher WHERE IDEMPOTENCY_KEY = '"
+                        + RechargeLedgerPostings.reversalKey(rechargeId) + "'"),
+                "it names the voucher it takes back");
+        assertEquals("0.00", scalar(
+                "SELECT COALESCE(SUM(DR_AMOUNT)-SUM(CR_AMOUNT),0) FROM acc_voucher_line"));
+    }
+
+    @Test
+    @DisplayName("voiding a completed sale reverses it too, and twice reverses once")
+    void voidReverses() {
+        var settled = settlement.settle(
+                List.of(mobile("ARTL", "199.00", null)),
+                List.of(cash("199.00", "199.00")),
+                staffUserId, "key-revvoid-1");
+        long rechargeId = settled.recharges().get(0).getRechargeId();
+        fulfilment.markCompleted(rechargeId, null, null, staffUserId);
+        fulfilment.voidRecharge(rechargeId, "entered twice", staffUserId);
+
+        assertEquals("199.00", netOf("RCHG_PENDING", "CR_MINUS_DR"));
+        assertEquals("0.00", netOf("INC_RCHG_COMM", "CR_MINUS_DR"));
+        assertEquals(1L, count("SELECT COUNT(*) FROM acc_voucher WHERE IDEMPOTENCY_KEY = '"
+                + RechargeLedgerPostings.reversalKey(rechargeId) + "'"));
+    }
+
+    @Test
+    @DisplayName("failing an AWAITING recharge still posts nothing at all")
+    void failBeforeCompleteStillFree() {
+        // The common path must stay free - log §7.2's biggest saving. The reversal
+        // is a no-op when there is no completion voucher to reverse.
+        var settled = settlement.settle(
+                List.of(mobile("RJIO", "239.00", null)),
+                List.of(cash("239.00", "239.00")),
+                staffUserId, "key-revnone-1");
+        long before = count("SELECT COUNT(*) FROM acc_voucher");
+
+        fulfilment.markFailed(settled.recharges().get(0).getRechargeId(), "declined", staffUserId);
+
+        assertEquals(before, count("SELECT COUNT(*) FROM acc_voucher"),
+                "nothing had been recognised, so there is nothing to take back");
+        assertEquals("239.00", netOf("RCHG_PENDING", "CR_MINUS_DR"));
+    }
+
+    @Test
+    @DisplayName("⚠ a recharge whose operator was retired after the sale can still be completed")
+    void retiredOperatorStillCompletes() {
+        // FINDING 3. requireSelectable applies the PICKER's rule, which is right
+        // for a new sale and wrong for one already taken: a recharge settled
+        // before its operator was retired could never be completed, and its cash
+        // would sit in RCHG_PENDING with no exit but a refund this slice has not
+        // built. V20 retired IDEA and VDFN mid-project, so this is scheduled
+        // rather than hypothetical.
+        var settled = settlement.settle(
+                List.of(mobile("ARTL", "199.00", null)),
+                List.of(cash("199.00", "199.00")),
+                staffUserId, "key-retired-1");
+        long rechargeId = settled.recharges().get(0).getRechargeId();
+
+        // Retire the operator between the sale and the completion.
+        em.createNativeQuery("UPDATE rc_operator SET IS_ACTIVE = FALSE "
+                + "WHERE OPERATOR_CODE = 'ARTL'").executeUpdate();
+        em.flush();
+        em.clear();
+
+        RcRecharge completed = fulfilment.markCompleted(rechargeId, null, null, staffUserId);
+        assertEquals(RechargeStatus.COMPLETED, completed.getStatusCode(),
+                "a retired operator governs the picker, not referential integrity");
+        assertEquals("0.00", netOf("RCHG_PENDING", "CR_MINUS_DR"),
+                "and the money got out of RCHG_PENDING");
+    }
+
+    @Test
+    @DisplayName("⚠ SARAVATE is refused with a 422, not posted to the wrong wallet")
+    void saravateIsRefused() {
+        // FINDING 7. floatAccountFor used to send every non-A1TOPUP route down the
+        // DIRECT branch, so completing an Airtel recharge on SARAVATE credited
+        // FLOAT_ARTL - an account that EXISTS, so the existence check passed and
+        // the voucher posted to the wrong wallet with no error. SARAVATE is seeded
+        // ACTIVE because V15's backfill needs it, so markCompleted accepted it as
+        // an override.
+        var settled = settlement.settle(
+                List.of(mobile("ARTL", "199.00", null)),
+                List.of(cash("199.00", "199.00")),
+                staffUserId, "key-saravate-1");
+        long rechargeId = settled.recharges().get(0).getRechargeId();
+
+        var ex = assertThrows(FloatAccountNotDerivableException.class,
+                () -> fulfilment.markCompleted(rechargeId, null, "SARAVATE", staffUserId));
+
+        assertEquals(422, ex.status(), "a rule the staff member can act on, not a 500");
+        assertTrue(ex.getMessage().contains("SARAVATE"), ex.getMessage());
+        assertEquals("0.00", scalar("SELECT COALESCE(SUM(CR_AMOUNT),0) FROM acc_voucher_line "
+                        + "WHERE ACCOUNT_CODE = 'FLOAT_ARTL'"),
+                "and nothing reached the wrong wallet");
+    }
+
+    @Test
+    @DisplayName("⚠ BSNL on DIRECT is a 422 naming the operator, not a 500")
+    void directWithNoWalletIsRefused() {
+        // FINDING 13. The message was carefully written and the client never saw
+        // it: IllegalStateException fell through to the catch-all handler, so the
+        // counter got "An unexpected error occurred." on the one failure where
+        // picking a different route fixes it.
+        var settled = settlement.settle(
+                List.of(mobile("BSNL", "147.00", null)),
+                List.of(cash("147.00", "147.00")),
+                staffUserId, "key-bsnldirect-1");
+        long rechargeId = settled.recharges().get(0).getRechargeId();
+
+        var ex = assertThrows(FloatAccountNotDerivableException.class,
+                () -> fulfilment.markCompleted(rechargeId, null, "DIRECT", staffUserId));
+
+        assertEquals(422, ex.status());
+        assertTrue(ex.getMessage().contains("BSNL"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("A1 Topup"), "it says what to do instead");
+    }
+
+    @Test
     @DisplayName("completing twice writes once and posts once")
     void completionIsIdempotent() {
         var settled = settlement.settle(
@@ -552,6 +710,31 @@ class RechargeSettlementServiceTest {
         return scalar("SELECT COALESCE(SUM(l." + side + "_AMOUNT), 0) FROM acc_voucher_line l "
                 + "JOIN acc_voucher v ON v.VOUCHER_ID = l.VOUCHER_ID "
                 + "WHERE v.SEALED_AT IS NOT NULL AND l.ACCOUNT_CODE = '" + accountCode + "'");
+    }
+
+    /**
+     * One account's NET total across every sealed voucher.
+     *
+     * <p>Distinct from {@link #balanceOf}, which sums ONE side — that is enough
+     * until a reversal exists, after which an account can carry both a debit and
+     * a credit and only the net means anything.
+     *
+     * <p>{@code side} is {@code CR_MINUS_DR} for a liability or income account and
+     * {@code DR_MINUS_CR} for an asset, so each reads positive in its own normal
+     * direction, the same convention {@code acc_account_balance} uses.
+     */
+    private String netOf(String accountCode, String side) {
+        String expr = "CR_MINUS_DR".equals(side)
+                ? "SUM(l.CR_AMOUNT)-SUM(l.DR_AMOUNT)"
+                : "SUM(l.DR_AMOUNT)-SUM(l.CR_AMOUNT)";
+        return scalar("SELECT COALESCE(" + expr + ", 0) FROM acc_voucher_line l "
+                + "JOIN acc_voucher v ON v.VOUCHER_ID = l.VOUCHER_ID "
+                + "WHERE v.SEALED_AT IS NOT NULL AND l.ACCOUNT_CODE = '" + accountCode + "'");
+    }
+
+    private long voucherIdOf(String idempotencyKey) {
+        return Long.parseLong(scalar("SELECT VOUCHER_ID FROM acc_voucher "
+                + "WHERE IDEMPOTENCY_KEY = '" + idempotencyKey + "'"));
     }
 
     private long count(String sql) {

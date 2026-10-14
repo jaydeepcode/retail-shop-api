@@ -15,9 +15,14 @@ import com.mangle.retailshopapp.accounting.LedgerPostingService;
 import com.mangle.retailshopapp.accounting.PostedVoucher;
 import com.mangle.retailshopapp.accounting.VoucherDraft;
 import com.mangle.retailshopapp.accounting.VoucherLeg;
+import com.mangle.retailshopapp.accounting.model.AccVoucher;
+import com.mangle.retailshopapp.accounting.model.AccVoucherLine;
 import com.mangle.retailshopapp.accounting.repo.AccAccountRepository;
+import com.mangle.retailshopapp.accounting.repo.AccVoucherLineRepository;
+import com.mangle.retailshopapp.accounting.repo.AccVoucherRepository;
 import com.mangle.retailshopapp.recharge.domain.FloatConsumption;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
+import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
 import com.mangle.retailshopapp.recharge.exception.NoCommissionRateException;
 import com.mangle.retailshopapp.recharge.model.AccCommissionRate;
 import com.mangle.retailshopapp.recharge.model.RcOperator;
@@ -81,6 +86,8 @@ public class RechargeLedgerPostings {
 
     private static final String SOURCE_RECHARGE_SALE = "RECHARGE_SALE";
     private static final String TYPE_SALES = "SALES";
+    private static final String TYPE_JOURNAL = "JOURNAL";
+    private static final String SOURCE_CORRECTION = "CORRECTION";
 
     /**
      * {@code WA = 1.0} for every wallet the shop holds.
@@ -98,13 +105,19 @@ public class RechargeLedgerPostings {
     private final LedgerPostingService ledger;
     private final AccCommissionRateRepository rates;
     private final AccAccountRepository accounts;
+    private final AccVoucherRepository vouchers;
+    private final AccVoucherLineRepository lines;
 
     public RechargeLedgerPostings(LedgerPostingService ledger,
                                   AccCommissionRateRepository rates,
-                                  AccAccountRepository accounts) {
+                                  AccAccountRepository accounts,
+                                  AccVoucherRepository vouchers,
+                                  AccVoucherLineRepository lines) {
         this.ledger = ledger;
         this.rates = rates;
         this.accounts = accounts;
+        this.vouchers = vouchers;
+        this.lines = lines;
     }
 
     /**
@@ -196,13 +209,16 @@ public class RechargeLedgerPostings {
         // rate refusal for what §8.2 is about: a config hole on a route that IS
         // reachable.
         String floatAccount = route.floatAccountFor(recharge.getOperatorCode());
-        if (accounts.findByAccountCodeIn(List.of(floatAccount)).isEmpty()) {
-            throw new IllegalStateException(
-                    "no float account %s for operator %s on route %s — the shop holds four "
-                            .formatted(floatAccount, recharge.getOperatorCode(), route.getCode())
-                            + "wallets (FLOAT_A1TOPUP, FLOAT_ARTL, FLOAT_RJIO, FLOAT_VI; log "
-                            + "§15.1), so either this operator's default route is wrong or the "
-                            + "route was overridden to one it has no connection on");
+
+        // Two distinct ways this fails, and both are now a 422 the counter can
+        // act on rather than a 500 with the explanation buried in a log. A null
+        // means the route has no derivation at all (SARAVATE); a missing account
+        // means the derivation named a wallet nobody holds, which is what a
+        // DIRECT pairing does for BSNL or any TV operator.
+        if (floatAccount == null
+                || accounts.findByAccountCodeIn(List.of(floatAccount)).isEmpty()) {
+            throw new FloatAccountNotDerivableException(
+                    recharge.getOperatorCode(), route.getCode(), floatAccount);
         }
 
         FloatConsumption consumption = consumptionFor(recharge, operator, route);
@@ -270,6 +286,102 @@ public class RechargeLedgerPostings {
                 legs);
 
         return ledger.post(draft);
+    }
+
+    /**
+     * Reverses a recharge's COMPLETION voucher, returning the money to
+     * {@code RCHG_PENDING}.
+     *
+     * <p>⚠ WITHOUT THIS, TWO LEGAL TRANSITIONS LEFT THE LEDGER OVERSTATING
+     * INCOME. {@code RechargeStatus} deliberately allows
+     * {@code COMPLETED → FAILED} (the operator never delivered) and
+     * {@code COMPLETED → VOIDED} (the sale should not exist), both added by log
+     * §7.1. On either path stage two has already run, so {@code INC_RCHG_COMM},
+     * {@code INC_RCHG_SURCHARGE} and the float consumption stayed recognised for
+     * a recharge that did not happen — while the day summary dropped the sale
+     * from takings and reported {@code heldPending} as zero, because
+     * {@code RCHG_PENDING} had already been cleared. Cash in the drawer
+     * reconciled to nothing.
+     *
+     * <p><b>A dated reversing JOURNAL, never an edit or a delete.</b> FRD §8.3
+     * mandates exactly this form after an account's reconciliation point, and it
+     * is correct before that point too — merely less tidy than the
+     * delete-and-repost §8.3 permits there. Choosing between the two is what
+     * {@code LedgerCorrectionRules} is for, and S2 shipped it with no caller; a
+     * journal is the form that is right in BOTH cases, so this does not need that
+     * decision in order to stop being wrong. The original voucher is left
+     * untouched, which V23's trigger would enforce anyway.
+     *
+     * <p><b>⚠ THE CASH LEG IS NEVER TOUCHED.</b> design-api.md §3.2: "a void
+     * never touches money the shop still holds." The customer genuinely paid and
+     * the cash is genuinely in the drawer, so only the completion is reversed and
+     * the amount returns to {@code RCHG_PENDING} — from where §7.4's residual
+     * mechanism settles it, by handing it back or keeping it on a named
+     * customer's account.
+     *
+     * <p>Idempotent on its own key, so reversing twice writes nothing. Returns
+     * {@code null} when there is no completion voucher to reverse, which is the
+     * ordinary {@code AWAITING_RECHARGE → FAILED} path — the common case, and the
+     * one log §7.2 made free.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PostedVoucher reverseCompletion(RcRecharge recharge, Integer staffUserId,
+                                           String reason, LocalDateTime when) {
+        var original = vouchers.findByIdempotencyKey(completionKey(recharge.getRechargeId()));
+        if (original.isEmpty()) {
+            // Never completed, so there is nothing recognised to take back.
+            return null;
+        }
+        AccVoucher completion = original.get();
+
+        List<VoucherLeg> mirrored = new ArrayList<>();
+        for (AccVoucherLine line : lines.findByVoucherIdOrderByLineNo(completion.getVoucherId())) {
+            // Each leg flipped: what was debited is credited back, and the other
+            // way round. Mirroring rather than recomputing matters — recomputing
+            // would use today's rate and today's surcharge, and so would reverse
+            // a different amount from the one that was posted.
+            VoucherLeg leg = line.getDrAmount().signum() > 0
+                    ? VoucherLeg.credit(line.getAccountCode(), line.getDrAmount())
+                    : VoucherLeg.debit(line.getAccountCode(), line.getCrAmount());
+            if (line.getPartyCustId() != null) {
+                leg = leg.withParty(line.getPartyCustId());
+            }
+            if (line.getPaymentMethod() != null) {
+                leg = leg.withPaymentMethod(line.getPaymentMethod());
+            }
+            mirrored.add(leg.withNarration("reversal of voucher " + completion.getVoucherId()));
+        }
+
+        VoucherDraft draft = new VoucherDraft(
+                TYPE_JOURNAL,
+                // Dated TODAY, not the day the completion was posted. FRD §8.3:
+                // "a JOURNAL dated the day the mistake was found". Back-dating it
+                // would silently restate a day that may already be reconciled.
+                when.toLocalDate(),
+                when,
+                "Reversal of R-%d completion: %s".formatted(
+                        recharge.getRechargeId(),
+                        reason == null || reason.isBlank() ? "no reason given" : reason),
+                SOURCE_CORRECTION,
+                "rc_recharge#" + recharge.getRechargeId(),
+                reversalKey(recharge.getRechargeId()),
+                completion.getVoucherId(),
+                staffUserId,
+                mirrored);
+
+        return ledger.post(draft);
+    }
+
+    /**
+     * {@code CORRECTION:rc_recharge#<id>:COMPLETION_REVERSED}.
+     *
+     * <p>A different source and a different stage from the completion it reverses,
+     * which is what §5.4 says the {@code :STAGE} suffix is for: "delete-and-repost
+     * reuses the same key; a correcting journal gets a different one, so both can
+     * coexist."
+     */
+    static String reversalKey(long rechargeId) {
+        return SOURCE_CORRECTION + ":rc_recharge#" + rechargeId + ":COMPLETION_REVERSED";
     }
 
     /**

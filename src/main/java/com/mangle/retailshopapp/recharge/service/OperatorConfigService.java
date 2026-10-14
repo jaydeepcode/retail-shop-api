@@ -93,6 +93,33 @@ public class OperatorConfigService {
                 .orElseThrow(() -> new UnknownOperatorException(operatorCode));
     }
 
+    /**
+     * An operator by code, live or retired.
+     *
+     * <p>⚠ FOR A RECHARGE THAT HAS ALREADY BEEN SOLD, never for the picker.
+     * {@link #requireSelectable} applies the picker's rule — active, not a
+     * sentinel — and applying that to a completion traps money: a recharge
+     * settled before its operator was retired could never be completed, and its
+     * cash would sit in {@code RCHG_PENDING} with no exit but a refund that this
+     * slice has not built. V20 retiring {@code IDEA} and {@code VDFN} is not a
+     * hypothetical; V16 will do the same to a route.
+     *
+     * <p>{@code RcOperator}'s own javadoc states the principle: "{@code IS_ACTIVE}
+     * governs the picker, not referential integrity."
+     */
+    @Transactional(readOnly = true)
+    public RcOperator requireKnown(String operatorCode) {
+        return operators.findById(operatorCode)
+                .orElseThrow(() -> new UnknownOperatorException(operatorCode));
+    }
+
+    /** A route by code, live or retired — see {@link #requireKnown}. */
+    @Transactional(readOnly = true)
+    public RefRechargeRoute requireKnownRoute(String routeCode) {
+        return routes.findById(routeCode)
+                .orElseThrow(() -> new UnknownRouteException(routeCode));
+    }
+
     @Transactional(readOnly = true)
     public RefRechargeRoute requireActiveRoute(String routeCode) {
         return routes.findById(routeCode)
