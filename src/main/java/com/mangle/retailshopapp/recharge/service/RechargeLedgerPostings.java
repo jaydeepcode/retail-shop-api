@@ -220,7 +220,32 @@ public class RechargeLedgerPostings {
 
         // Cr commission BY SUBTRACTION. Computing A x r separately is what puts a
         // plug figure in the voucher and stops it balancing to the paisa.
-        legs.add(VoucherLeg.credit(INC_RCHG_COMM, consumption.commission()));
+        //
+        // ⚠ GUARDED, AND WITHOUT THE GUARD ONE LIVE OPERATOR COULD NOT BE SOLD AT
+        // ALL. LedgerPostingService refuses a zero leg ("a leg cannot be zero"),
+        // and a zero commission is not an edge case here: V25 seeds BIGTV at
+        // RATE_PCT 0.000000 and V28 repoints its default route to A1TOPUP, which
+        // is where that rate lives — so BIGTV is fully sellable, and every
+        // completion threw LedgerPostingException, rolled the transaction back,
+        // left the status at AWAITING_RECHARGE and returned a 500. The cash was
+        // already collected and stuck in RCHG_PENDING with no exit.
+        //
+        // A zero rate MUST post rather than refuse. §8.4 is explicit: seed "at
+        // zero rather than at a guess ... so the operator can trade from day
+        // one", and "the tail can carry provisional zeros and be corrected by
+        // journal". That is a different case from §8.2's MISSING rate, which does
+        // refuse — a stated zero is a known placeholder, an absent row is a
+        // config hole. At r = 0 the portal debits the full face value, so the
+        // float leg carries the whole amount and no income is recognised, which
+        // is exactly what "we do not know this rate yet" means.
+        //
+        // Found by code review, confirmed by execution. The arithmetic was
+        // tested (FloatConsumptionTest.zeroRateAtParity asserts commission is
+        // 0.00) and a voucher was never posted with it — the same gap between two
+        // correct tests that hid the drawer identity.
+        if (consumption.commission().signum() > 0) {
+            legs.add(VoucherLeg.credit(INC_RCHG_COMM, consumption.commission()));
+        }
 
         // Cr the shop's own charge as its OWN leg, computed directly rather than
         // by subtraction (log §15.11). Keeping it out of INC_RCHG_COMM is an

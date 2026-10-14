@@ -1,6 +1,7 @@
 package com.mangle.retailshopapp.recharge.repo;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.Query;
@@ -42,4 +43,29 @@ public interface AccAccountBalanceRepository extends Repository<AccAccount, Stri
     @Query(value = "SELECT BALANCE FROM acc_account_balance WHERE ACCOUNT_CODE = :code",
            nativeQuery = true)
     List<BigDecimal> balanceOf(@Param("code") String code);
+
+    /**
+     * One account's NET MOVEMENT on one accounting date, debits less credits.
+     *
+     * <p>⚠ THIS IS WHAT THE DRAWER ACTUALLY RECONCILES AGAINST, and the view
+     * cannot answer it: {@code acc_account_balance} is an all-time aggregate, so
+     * it reports every rupee that ever passed through {@code CASH_RECHARGE}
+     * rather than today's.
+     *
+     * <p>Keyed on {@code VOUCHER_DATE} — the ACCOUNTING date — and not on
+     * {@code SEALED_AT}, which is merely when the row was written. A back-dated
+     * correction belongs to the day it is dated for, which is the whole reason
+     * §2.3 keeps the two columns apart.
+     *
+     * <p>Sealed vouchers only, for the reason V26's header spells out at length:
+     * an unsealed voucher is a half-written one, and counting it is the defect S2
+     * found in §2.6's published query.
+     */
+    @Query(value = "SELECT COALESCE(SUM(l.DR_AMOUNT) - SUM(l.CR_AMOUNT), 0) "
+            + "  FROM acc_voucher_line l "
+            + "  JOIN acc_voucher v ON v.VOUCHER_ID = l.VOUCHER_ID "
+            + " WHERE v.SEALED_AT IS NOT NULL "
+            + "   AND v.VOUCHER_DATE = :day "
+            + "   AND l.ACCOUNT_CODE = :code", nativeQuery = true)
+    BigDecimal movementOn(@Param("code") String code, @Param("day") LocalDate day);
 }

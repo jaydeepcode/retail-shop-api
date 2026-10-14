@@ -11,17 +11,27 @@ import java.util.Map;
  * <p>⚠ THIS IS WHAT THE SLICE'S GATE COMPARES TO THE DRAWER
  * (implementation-plan.md:125).
  *
- * <p><b>⚠ COMPARE THE DRAWER AGAINST {@code totalCollected}, NOT
- * {@code totalTakings}.</b>
+ * <p><b>⚠ COMPARE THE DRAWER AGAINST {@code cashCollectedToday}.</b>
  *
  * <pre>
- * drawer  =  totalCollected  +  heldPending        where totalCollected = takings + surcharge
+ * the recharge till today  =  cashCollectedToday  ==  tenderMix[CASH]
  * </pre>
  *
+ * <p>Those are two INDEPENDENT readings of the same number — the first from the
+ * ledger's {@code CASH_RECHARGE} movement for the day, the second from today's
+ * cash tender rows — and they must agree. If they differ, a posting is wrong.
+ *
+ * <p>⚠ {@code heldPending} IS NOT A TERM IN THAT EQUATION, which is the
+ * correction of two earlier formulations. It is the ALL-TIME, ALL-TENDER open
+ * exposure: it keeps money from recharges left unresolved on previous days, and
+ * it accumulates UPI and credit settlements that never touched the drawer. It
+ * explains why takings sit below cash collected; it does not balance against the
+ * till.
+ *
  * <p>{@code totalTakings} is the recharge FACE VALUE and excludes the shop's own
- * charge, which is its own income line by decision (log §10.2, §15.11). A screen
- * comparing the drawer against takings alone shows a phantom shortfall of ₹10 per
- * DTH recharge. {@code totalCollected} exists so that cannot happen.
+ * charge, which is its own income line by decision (log §10.2, §15.11);
+ * {@code totalCollected} adds the two back together and is the day's recognised
+ * income, not the till figure.
  *
  * <p>{@code heldPending} is the figure that explains the gap, and it comes from
  * the {@code RCHG_PENDING} account balance rather than from a status join (log
@@ -41,6 +51,7 @@ public record DaySummaryResponse(
         BigDecimal totalTakings,
         BigDecimal totalSurcharge,
         BigDecimal totalCollected,
+        BigDecimal cashCollectedToday,
         Map<String, BigDecimal> tenderMix,
         long awaitingCount,
         long unresolvedFailureCount,

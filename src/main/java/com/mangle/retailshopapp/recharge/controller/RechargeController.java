@@ -501,6 +501,7 @@ public class RechargeController {
                 summary.totalTakings(),
                 summary.totalSurcharge(),
                 summary.totalCollected(),
+                summary.cashCollectedToday(),
                 summary.tenderMix().entrySet().stream().collect(java.util.stream.Collectors.toMap(
                         e -> e.getKey().name(), Map.Entry::getValue)),
                 summary.awaitingCount(),

@@ -31,6 +31,7 @@ import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.Reque
 import jakarta.persistence.EntityManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -190,6 +191,94 @@ class RechargeHistoryServiceTest {
         }
 
         @Test
+        @DisplayName("⚠ the till reconciles from the LEDGER and the tender rows independently")
+        void tillReconcilesFromTwoSources() {
+            // The replacement for two wrong identities. cashCollectedToday is the
+            // day's CASH_RECHARGE movement read from the ledger; tenderMix[CASH]
+            // is today's cash tender rows read from rc_txn_payment. Two
+            // independent readings that must agree — so a disagreement means a
+            // posting is wrong, which is a real check rather than a restatement.
+            var completed = settle(ServiceType.TV, "DISHTV", "240.00", "key-till-1");
+            fulfilment.markCompleted(completed.recharges().get(0).getRechargeId(),
+                    null, null, staffUserId);
+            settle(ServiceType.MOBILE, "ARTL", "199.00", "key-till-2");
+
+            var summary = history.daySummary(LocalDate.now());
+
+            assertEquals(summary.tenderMix().get(SettlementMethod.CASH),
+                    summary.cashCollectedToday(),
+                    "the ledger and the tender rows must report the same cash");
+            assertTrue(summary.cashCollectedToday().signum() > 0);
+        }
+
+        @Test
+        @DisplayName("⚠ a UPI sale does NOT enter the till figure, though it DOES hold money")
+        void upiDoesNotEnterTheTill() {
+            // WHY THE OLD IDENTITY WAS WRONG, case one. RCHG_PENDING is debited
+            // from UPI_CLEARING and AR_RECHARGE as well as from CASH_RECHARGE, so
+            // a settled-not-completed UPI sale inflates heldPending while no cash
+            // entered the drawer. `drawer = collected + held` therefore could not
+            // balance, and it only ever looked right because every test used cash.
+            settlement.settle(
+                    List.of(new RequestedRecharge(ServiceType.MOBILE, "9000000002", "ARTL",
+                            new BigDecimal("199.00"), null)),
+                    List.of(new RequestedTender(SettlementMethod.UPI, new BigDecimal("199.00"),
+                            null, "UPI/1", null, null)),
+                    staffUserId, "key-till-upi");
+
+            var summary = history.daySummary(LocalDate.now());
+
+            assertEquals(new BigDecimal("0.00"), summary.cashCollectedToday(),
+                    "no cash was taken, so the till figure is zero");
+            assertNull(summary.tenderMix().get(SettlementMethod.CASH),
+                    "and there is no CASH key at all");
+            assertEquals(new BigDecimal("199.00"), summary.heldPending(),
+                    "but the money IS held - held is all-tender, which is why it "
+                            + "cannot be a term in the till equation");
+        }
+
+        @Test
+        @DisplayName("⚠ heldPending is ALL-TIME, so it survives a day boundary and the till figure does not")
+        void heldPendingIsAllTime() {
+            // WHY THE OLD IDENTITY WAS WRONG, case two. heldPending is the whole
+            // RCHG_PENDING balance with no date filter - deliberately, because
+            // open exposure is open regardless of when it was taken (§7.1(d)
+            // forbids a date parameter on the open-items repository). But that
+            // makes it incompatible with the day-scoped takings it was added to:
+            // anything left unresolved overnight corrupts every later day.
+            //
+            // Shown by asking for ANOTHER day rather than by back-dating a
+            // voucher. The first attempt at this test tried the latter and V23's
+            // trigger refused it outright - "acc_voucher is immutable once
+            // sealed; post a correcting JOURNAL instead" - which is the
+            // immutability guarantee doing its job, and a neat demonstration that
+            // the ledger cannot be quietly reshaped even by its own test suite.
+            settle(ServiceType.MOBILE, "ARTL", "199.00", "key-till-stale");
+
+            var today = history.daySummary(LocalDate.now());
+            assertEquals(new BigDecimal("199.00"), today.cashCollectedToday());
+            assertEquals(new BigDecimal("199.00"), today.heldPending());
+
+            // Tomorrow: no cash was taken, but the money is still owed.
+            var tomorrow = history.daySummary(LocalDate.now().plusDays(1));
+
+            assertEquals(new BigDecimal("0.00"), tomorrow.cashCollectedToday(),
+                    "the till figure is day-scoped, so tomorrow it is zero");
+            assertEquals(new BigDecimal("0.00"), tomorrow.totalCollected(),
+                    "and so are takings");
+            assertEquals(new BigDecimal("199.00"), tomorrow.heldPending(),
+                    "but the money IS still held, and correctly so - the recharge "
+                            + "is still owed to the customer");
+
+            // The old formula would have claimed Rs 199 of till money tomorrow,
+            // on a day when the drawer saw nothing at all.
+            assertNotEquals(tomorrow.cashCollectedToday(),
+                    tomorrow.totalCollected().add(tomorrow.heldPending()),
+                    "collected + held is NOT the till figure once a day boundary "
+                            + "is crossed - the formula this replaces");
+        }
+
+        @Test
         @DisplayName("⚠ the drawer identity holds WITH a surcharge — the case that was wrong")
         void drawerIdentityWithSurcharge() {
             // THE TEST THAT WAS MISSING, and the defect it would have caught.
@@ -229,18 +318,30 @@ class RechargeHistoryServiceTest {
             BigDecimal drawer = summary.tenderMix().get(SettlementMethod.CASH);
             assertEquals(new BigDecimal("460.00"), drawer, "both baskets were paid for");
 
-            // ⚠ THE WRONG FORM, asserted as wrong so nobody restores it.
+            // ⚠ BOTH SUPERSEDED FORMS, asserted as wrong so neither comes back.
+            //
+            // takings + held omitted the surcharge and was Rs 10 short. Replacing
+            // it with collected + held fixed that and was still wrong, because
+            // heldPending is all-time and all-tender - see
+            // heldPendingIsAllTime and upiDoesNotEnterTheTill. BOTH happen to
+            // balance in this fixture, which is same-day and all-cash, and that
+            // is exactly why neither was caught here.
             assertNotEquals(drawer, summary.totalTakings().add(summary.heldPending()),
-                    "takings + held omits the surcharge and is 10 short - this is the "
-                            + "formula the close screen must NOT use");
+                    "takings + held omits the surcharge");
 
-            // The right one.
-            assertEquals(drawer, summary.totalCollected().add(summary.heldPending()),
-                    "drawer = totalCollected + heldPending");
-            assertEquals(drawer,
-                    summary.totalTakings().add(summary.totalSurcharge())
-                            .add(summary.heldPending()),
-                    "and the same thing written out in three terms");
+            // The till figure is read from the ledger and cross-checked against
+            // the tender rows. No addition for a client to get wrong.
+            assertEquals(drawer, summary.cashCollectedToday(),
+                    "the ledger's CASH_RECHARGE movement for the day equals the "
+                            + "cash tendered - two independent sources agreeing");
+
+            // The surcharge point this test exists for still stands: our charge is
+            // real money that reached the drawer, and it is NOT in takings.
+            assertEquals(new BigDecimal("250.00"), summary.totalCollected(),
+                    "240 takings + 10 our charges is what the customer handed over");
+            assertNotEquals(summary.totalTakings(), summary.totalCollected(),
+                    "and it is not the same number as takings, which is the whole "
+                            + "reason the first formula was wrong");
         }
 
         @Test

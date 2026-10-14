@@ -330,6 +330,67 @@ class RechargeSettlementServiceTest {
     }
 
     @Test
+    @DisplayName("⚠ a zero-rate operator completes — BIGTV was unsellable without this")
+    void zeroCommissionCompletes() {
+        // THE DEFECT: LedgerPostingService refuses a zero leg, and the
+        // commission leg was unguarded while the surcharge leg beside it was
+        // not. V25 seeds BIGTV at RATE_PCT 0.000000 and V28 repoints its
+        // default route to A1TOPUP, where that rate lives — so BIGTV is fully
+        // sellable, and every completion threw, rolled back, left the status
+        // at AWAITING_RECHARGE and returned a 500 with the cash stuck in
+        // RCHG_PENDING.
+        //
+        // A zero rate must POST, not refuse: §8.4 seeds zeros "rather than at
+        // a guess ... so the operator can trade from day one", and "the tail
+        // can carry provisional zeros and be corrected by journal". That is a
+        // different case from §8.2's MISSING rate, which does refuse.
+        //
+        // FloatConsumptionTest.zeroRateAtParity already asserted the
+        // arithmetic. No test ever posted a voucher with it.
+        var settled = settlement.settle(
+                List.of(new RequestedRecharge(ServiceType.TV, "02700000003", "BIGTV",
+                        new BigDecimal("200.00"), new BigDecimal("0.00"))),
+                List.of(cash("200.00", "200.00")),
+                staffUserId, "key-bigtv-1");
+        long rechargeId = settled.recharges().get(0).getRechargeId();
+
+        RcRecharge completed = fulfilment.markCompleted(rechargeId, null, null, staffUserId);
+        assertEquals(RechargeStatus.COMPLETED, completed.getStatusCode());
+
+        // Two legs, not three: the portal debits the full face value at r = 0,
+        // so the float carries the whole amount and no income is recognised.
+        String key = RechargeLedgerPostings.completionKey(rechargeId);
+        assertEquals("200.00", legAmount(key, "RCHG_PENDING", "DR_AMOUNT"));
+        assertEquals("200.00", legAmount(key, "FLOAT_A1TOPUP", "CR_AMOUNT"));
+        assertEquals("0.00", legAmount(key, "INC_RCHG_COMM", "CR_AMOUNT"),
+                "no commission leg at all, rather than a zero one");
+        assertEquals("0.00", scalar(
+                "SELECT COALESCE(SUM(DR_AMOUNT)-SUM(CR_AMOUNT),0) FROM acc_voucher_line"));
+    }
+
+    @Test
+    @DisplayName("⚠ a zero-rate operator WITH a surcharge still posts three legs")
+    void zeroCommissionWithSurcharge() {
+        // The combination, because the guard could have been written as an
+        // if/else and silently dropped the surcharge instead.
+        var settled = settlement.settle(
+                List.of(new RequestedRecharge(ServiceType.TV, "02700000004", "BIGTV",
+                        new BigDecimal("200.00"), new BigDecimal("10.00"))),
+                List.of(cash("210.00", "210.00")),
+                staffUserId, "key-bigtv-2");
+        long rechargeId = settled.recharges().get(0).getRechargeId();
+        fulfilment.markCompleted(rechargeId, null, null, staffUserId);
+
+        String key = RechargeLedgerPostings.completionKey(rechargeId);
+        assertEquals("210.00", legAmount(key, "RCHG_PENDING", "DR_AMOUNT"));
+        assertEquals("200.00", legAmount(key, "FLOAT_A1TOPUP", "CR_AMOUNT"));
+        assertEquals("10.00", legAmount(key, "INC_RCHG_SURCHARGE", "CR_AMOUNT"),
+                "our own charge is still earned even when the operator pays nothing");
+        assertEquals("0.00", scalar(
+                "SELECT COALESCE(SUM(DR_AMOUNT)-SUM(CR_AMOUNT),0) FROM acc_voucher_line"));
+    }
+
+    @Test
     @DisplayName("a failed recharge posts nothing, and the money stays pending")
     void failurePostsNothing() {
         // log §7.2's biggest saving: "FAILED needs no reversing entry at all."

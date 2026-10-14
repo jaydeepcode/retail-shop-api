@@ -50,6 +50,7 @@ public class RechargeHistoryService {
             RechargeStatus.AWAITING_RECHARGE, RechargeStatus.FAILED);
 
     private static final String RCHG_PENDING = "RCHG_PENDING";
+    private static final String CASH_RECHARGE = "CASH_RECHARGE";
     private static final BigDecimal ZERO = new BigDecimal("0.00");
 
     private final RechargeHistoryRepository history;
@@ -169,52 +170,61 @@ public class RechargeHistoryService {
      * End of day (§3.2 endpoint #18, §7.1(c)).
      *
      * <p>⚠ THIS IS THE FIGURE THE S3 GATE COMPARES TO THE DRAWER
-     * (implementation-plan.md:125), so the two rules below are not presentation
+     * (implementation-plan.md:125), so the rules below are not presentation
      * choices.
-     *
-     * <p><b>⚠ THE IDENTITY, AND A CORRECTION WORTH READING BEFORE TRUSTING AN
-     * EARLIER ONE.</b> The drawer reconciles like this:
-     *
-     * <pre>
-     * drawer  =  totalTakings  +  totalSurcharge  +  heldPending
-     * </pre>
-     *
-     * <p>This slice's own notes, PR and plan all stated it as
-     * {@code drawer = totalTakings + heldPending}, omitting the surcharge. That
-     * is wrong on any day carrying a DTH sale, which is most days: a ₹240 Dish TV
-     * recharge with the ₹10 fee puts ₹250 in the drawer while {@code totalTakings}
-     * reports ₹240, because takings are the recharge FACE VALUE and the surcharge
-     * is deliberately its own income line (log §10.2, §15.11). A close screen
-     * built on the two-term form shows a phantom shortfall of ₹10 per DTH
-     * recharge — and FY2026-27 carried ₹2,957 of surcharge, so it would be wrong
-     * every day.
-     *
-     * <p>It was found by driving a real sale through a running server, not by any
-     * test: the unit test asserting the identity used two MOBILE recharges, where
-     * the surcharge term is zero and the wrong formula happens to balance. Two
-     * correct tests with an unasserted gap between them.
-     *
-     * <p>{@code totalCollected} is the defence rather than the fix: it carries
-     * {@code totalTakings + totalSurcharge} so a client has one number to compare
-     * and no arithmetic to get wrong.
      *
      * <p><b>Takings count COMPLETED recharges only</b> (requirement 6,
      * design-domain.md §5.2). That is also what makes {@code VOIDED} work: a
      * voided sale drops out for free, because the query already filters on the
      * status.
      *
-     * <p><b>And a consequence worth stating on the screen rather than hiding:</b>
-     * because takings count only completed recharges while the tender mix counts
-     * everything settled, CASH IN THE DRAWER WILL NOT EQUAL TAKINGS whenever a
-     * recharge has failed and not yet been refunded. §7.1(c) is explicit that this
-     * is correct — the money is held pending — and that the warning should read
-     * "₹X held against N unresolved recharges", not "till mismatch".
+     * <h2>⚠ What the drawer reconciles against, after two corrections</h2>
      *
-     * <p>⚠ THE ₹X COMES FROM THE LEDGER, NOT FROM A STATUS JOIN. Under log §7.2
-     * collected cash sits in {@code RCHG_PENDING} until completion, so open
-     * exposure is one account balance — "the figure becomes reconcilable instead
-     * of merely displayed". The COUNT still comes from {@code rc_recharge},
-     * because an account balance cannot say how many recharges are behind it.
+     * <pre>
+     * the recharge till today  =  cashCollectedToday  ==  tenderMix[CASH]
+     * </pre>
+     *
+     * <p>Two INDEPENDENT sources of the same number, and they must agree:
+     * {@code cashCollectedToday} is the day's net movement on
+     * {@code CASH_RECHARGE} read from the ledger, and {@code tenderMix[CASH]} is
+     * the sum of today's cash tender rows read from {@code rc_txn_payment}. If
+     * they ever differ, a posting is wrong — which makes this a real cross-check
+     * rather than a restatement.
+     *
+     * <p><b>This replaces two earlier formulations, both of which were wrong,
+     * and the second wrongly "fixed" the first.</b>
+     *
+     * <ol>
+     *   <li>{@code drawer = totalTakings + heldPending} omitted the surcharge, so
+     *       it was short ₹10 on every DTH recharge.
+     *   <li>{@code drawer = totalCollected + heldPending} fixed that and was
+     *       still wrong twice over: {@code heldPending} is the WHOLE
+     *       {@code RCHG_PENDING} balance with NO date filter, so anything left
+     *       unresolved overnight corrupts every later day; and
+     *       {@code RCHG_PENDING} accumulates UPI and credit settlements too, so a
+     *       settled-not-completed UPI sale inflates it although no cash entered
+     *       the drawer. It balanced only for same-day, all-cash baskets — which
+     *       was precisely the shape of every test and every manual check.
+     * </ol>
+     *
+     * <p>Both were found by review and confirmed by execution. The lesson is the
+     * one this slice keeps relearning: a figure that balances in the fixture you
+     * chose is not a figure that balances.
+     *
+     * <p><b>{@code heldPending} is therefore NOT a term in the till equation.</b>
+     * It is the all-time, all-tender open exposure — which is exactly what log
+     * §7.2 built {@code RCHG_PENDING} to be, "a readable account balance" rather
+     * than something assembled from status joins. It explains why takings are
+     * below cash collected; it does not balance against the drawer. Attributing
+     * held money to a tender would need an allocation rule for a part-cash
+     * part-UPI basket, and no such rule exists or is wanted.
+     *
+     * <p>A consequence worth stating on the screen rather than hiding: because
+     * takings count only completed recharges while cash is collected at
+     * settlement, CASH IN THE DRAWER WILL EXCEED TAKINGS whenever a recharge has
+     * failed or is still waiting. §7.1(c) is explicit that this is correct — the
+     * money is held — and that the warning should read "₹X held against N
+     * unresolved recharges", not "till mismatch".
      */
     @Transactional(readOnly = true)
     public DaySummary daySummary(LocalDate date) {
@@ -234,9 +244,12 @@ public class RechargeHistoryService {
             tenderMix.put(SettlementMethod.fromLineType((String) row[0]), scale2(row[1]));
         }
 
-        // The two warning counts (requirement 10). Day-scoped, because this is
-        // the day's own exposure — the worklist is where the whole open set lives,
-        // and §7.1(d) keeps that query free of any date at all.
+        // ⚠ ALL-TIME AND ALL-TENDER, both deliberately. These are the counts that
+        // go with heldPending, and the three have to be scoped the same way or the
+        // sentence "Rs X held against N unresolved recharges" counts a different
+        // set from the one it prices. §7.1(d) forbids a date parameter on the
+        // open-items repository precisely so this cannot drift into being
+        // day-scoped — open items are open regardless of when they were taken.
         long awaiting = 0;
         long failed = 0;
         for (Object[] row : openItems.countOpenByStatus(OPEN_STATUSES)) {
@@ -259,10 +272,12 @@ public class RechargeHistoryService {
                 takings,
                 totalTakings,
                 totalSurcharge,
-                // What the customer actually handed over for the completed
-                // recharges. Derived here rather than by the client, because
-                // getting it wrong is exactly what happened — see the javadoc.
+                // What the customer handed over for today's COMPLETED recharges.
+                // Still useful - it is the day's recognised income - but it is not
+                // the till figure, because it excludes everything still held.
                 totalTakings.add(totalSurcharge),
+                // The till figure, from the ledger.
+                scale2(balances.movementOn(CASH_RECHARGE, day)),
                 tenderMix,
                 awaiting,
                 failed,
@@ -313,6 +328,7 @@ public class RechargeHistoryService {
     public record DaySummary(LocalDate date, List<TakingsRow> takings,
                              BigDecimal totalTakings, BigDecimal totalSurcharge,
                              BigDecimal totalCollected,
+                             BigDecimal cashCollectedToday,
                              Map<SettlementMethod, BigDecimal> tenderMix,
                              long awaitingCount, long unresolvedFailureCount,
                              BigDecimal heldPending) {
