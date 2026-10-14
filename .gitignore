@@ -49,3 +49,4 @@ replay_pid*
 # which would make the !config/*.example.sh negation unreachable.
 config/*
 !config/*.example.sh
+local-dev/logs/
