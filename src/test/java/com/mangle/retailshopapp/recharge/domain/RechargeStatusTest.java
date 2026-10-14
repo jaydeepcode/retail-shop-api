@@ -79,6 +79,34 @@ class RechargeStatusTest {
     }
 
     @Test
+    @DisplayName("⚠ VOIDED mandates a reason and FAILED does not — one status, not two")
+    void reasonIsMandatedByOneStatusOnly() {
+        // The javadoc on requiresReasonOnEntry claimed two statuses while the
+        // body returned one, and nothing called it — so the enum claimed to own a
+        // rule that voidRecharge had hardcoded for itself (review finding 11).
+        //
+        // log §7.1 attaches the requirement to VOIDED alone: "one new terminal
+        // status, reachable only from COMPLETED, with a mandatory reason", and the
+        // argument is specific to it — a void must not become a back door for
+        // refunding a delivered recharge, and with v1 single-user (FRD §3) there
+        // is no second approver, so the reason IS the control.
+        //
+        // ⚠ V12__Recharge_tables.sql's comment says both VOIDED and FAILED
+        // require one. That comment is wrong, and is deliberately not corrected in
+        // place: V12 is applied, and editing it would change its Flyway checksum.
+        // This assertion is where the rule is settled.
+        assertTrue(VOIDED.requiresReasonOnEntry());
+
+        for (RechargeStatus s : RechargeStatus.values()) {
+            if (s != VOIDED) {
+                assertFalse(s.requiresReasonOnEntry(),
+                        s + " must not mandate a reason; design-api.md §3.2's "
+                                + "MarkFailedRequest takes an OPTIONAL one");
+            }
+        }
+    }
+
+    @Test
     @DisplayName("only COMPLETED counts toward the day's takings")
     void takings() {
         for (RechargeStatus s : RechargeStatus.values()) {

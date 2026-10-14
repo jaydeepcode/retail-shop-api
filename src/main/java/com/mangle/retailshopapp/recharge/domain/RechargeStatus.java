@@ -99,7 +99,31 @@ public enum RechargeStatus {
         return this == COMPLETED;
     }
 
-    /** The two statuses that mandate a reason (log §7.1). */
+    /**
+     * Whether entering this status mandates a reason.
+     *
+     * <p>⚠ ONE STATUS, NOT TWO, and the javadoc here used to say two while the
+     * body said one. log §7.1 attaches the requirement to {@code VOIDED} alone —
+     * "one new terminal status, reachable only from {@code COMPLETED}, with a
+     * mandatory reason" — and the argument is specific to it: a void "must not
+     * become a back door for refunding a delivered recharge", because reversing
+     * the float legs would restore float that never came back, and with v1 fixed
+     * as single-user (FRD §3) there is no second approver. The reason plus float
+     * reconciliation IS the control.
+     *
+     * <p>{@code COMPLETED → FAILED} takes an OPTIONAL reason, which is what
+     * design-api.md §3.2's {@code MarkFailedRequest(reason?)} specifies. It is a
+     * different kind of event: the operator failed to deliver, which is ordinary,
+     * rather than a sale being withdrawn.
+     *
+     * <p>⚠ {@code V12__Recharge_tables.sql} states the opposite — "COMPLETED →
+     * VOIDED and COMPLETED → FAILED both require a reason (log §7.1), and the
+     * state machine enforces that" — and that comment is wrong. It is NOT
+     * corrected in place: V12 is already applied to the developer restore, and
+     * editing even a comment changes its Flyway checksum, which would fail
+     * {@code validate} on every database that has it. Recorded here, where the
+     * rule actually lives.
+     */
     public boolean requiresReasonOnEntry() {
         return this == VOIDED;
     }

@@ -208,7 +208,12 @@ public class RechargeFulfilmentService {
      */
     @Transactional
     public RcRecharge voidRecharge(long rechargeId, String reason, Integer staffUserId) {
-        if (reason == null || reason.isBlank()) {
+        // Asked of the state machine rather than hardcoded here, which is what
+        // review finding 11 was about: the enum claimed to own this rule and
+        // nothing consulted it, so a second reason-mandating status or a second
+        // mutation path would not have picked it up.
+        if (RechargeStatus.VOIDED.requiresReasonOnEntry()
+                && (reason == null || reason.isBlank())) {
             throw new ReasonRequiredException("void a recharge");
         }
         RcRecharge recharge = lockOrThrow(rechargeId);

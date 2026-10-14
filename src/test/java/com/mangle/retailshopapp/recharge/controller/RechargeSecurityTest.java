@@ -12,6 +12,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -126,6 +129,82 @@ class RechargeSecurityTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"recharges\":[],\"settlementLines\":[]}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * ⚠ EVERY ONE OF THESE WAS A 500 before review finding 6.
+     *
+     * Spring raises {@code MethodArgumentTypeMismatchException} during argument
+     * resolution, and only the {@code Exception} catch-all matched it — so a
+     * mistyped filter returned "An unexpected error occurred." and logged a stack
+     * trace at ERROR. The module handled the same failure in the request BODY and
+     * not in the query string or the path.
+     *
+     * Asserted over HTTP rather than at the service layer, because argument
+     * resolution happens before any service is reached: a unit test cannot see
+     * this at all, which is why it survived.
+     */
+    @Test
+    @WithMockUser(username = "staff", authorities = {"ROLE_USER"})
+    @DisplayName("⚠ a mistyped enum filter is a 400 naming the accepted values, not a 500")
+    void badEnumParamIsA400() throws Exception {
+        mockMvc.perform(get("/recharge/history").param("status", "BOGUS"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("status"))
+                // The accepted values are part of the published contract (§6.1:
+                // "enums cross the wire as their string names"), so naming them
+                // saves a trip through the documentation and leaks nothing.
+                .andExpect(jsonPath("$.fieldErrors[0].message")
+                        .value(org.hamcrest.Matchers.containsString("COMPLETED")));
+    }
+
+    @Test
+    @WithMockUser(username = "staff", authorities = {"ROLE_USER"})
+    @DisplayName("a non-numeric page is a 400")
+    void badNumberParamIsA400() throws Exception {
+        mockMvc.perform(get("/recharge/history").param("page", "abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].message")
+                        .value(org.hamcrest.Matchers.containsString("whole number")));
+    }
+
+    @Test
+    @WithMockUser(username = "staff", authorities = {"ROLE_USER"})
+    @DisplayName("an impossible date is a 400 showing the form expected")
+    void badDateParamIsA400() throws Exception {
+        mockMvc.perform(get("/recharge/day-summary").param("date", "2026-13-45"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("date"))
+                .andExpect(jsonPath("$.fieldErrors[0].message")
+                        .value(org.hamcrest.Matchers.containsString("2026-10-14")));
+    }
+
+    @Test
+    @WithMockUser(username = "staff", authorities = {"ROLE_USER"})
+    @DisplayName("a bad enum in the PATH is a 400 too, not only in the query")
+    void badEnumPathVariableIsA400() throws Exception {
+        mockMvc.perform(get("/recharge/number-hints/MOBILEX/9000000002"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].message")
+                        .value(org.hamcrest.Matchers.containsString("MOBILE")));
+    }
+
+    @Test
+    @WithMockUser(username = "staff", authorities = {"ROLE_USER"})
+    @DisplayName("⚠ and the error body never carries Spring's own text")
+    void errorBodyDoesNotEchoInternals() throws Exception {
+        // §8.3: the message is replaced, never forwarded. Spring's own text names
+        // Java classes and package paths.
+        String body = mockMvc.perform(get("/recharge/history").param("status", "BOGUS"))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+
+        assertFalse(body.contains("com.mangle"), body);
+        assertFalse(body.contains("java.lang"), body);
+        assertFalse(body.toLowerCase().contains("exception"), body);
+        // And a traceId is always present, which is what replaces leaking the text.
+        assertTrue(body.contains("\"traceId\""), body);
     }
 
     @Test

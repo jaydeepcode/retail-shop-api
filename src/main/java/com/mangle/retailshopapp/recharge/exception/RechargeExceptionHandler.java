@@ -1,8 +1,11 @@
 package com.mangle.retailshopapp.recharge.exception;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +19,7 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.mangle.retailshopapp.recharge.controller.RechargeController;
 import com.mangle.retailshopapp.recharge.model.response.ErrorResponse;
@@ -115,6 +119,68 @@ public class RechargeExceptionHandler {
         return ResponseEntity.badRequest().body(new ErrorResponse(
                 ErrorCode.INVALID_REQUEST, "The request body could not be read.",
                 traceId, null, null));
+    }
+
+    /**
+     * A query or path value that could not be converted to its parameter type.
+     *
+     * <p>⚠ WITHOUT THIS, EVERY ONE OF THESE WAS A 500. Spring raises
+     * {@code MethodArgumentTypeMismatchException} during argument resolution, and
+     * the only handler that matched it was {@code Exception} — so
+     * {@code ?status=BOGUS}, {@code ?page=abc}, {@code ?date=2026-13-45} and
+     * {@code /number-hints/MOBILEX/9999999999} all returned
+     * {@code INTERNAL_ERROR / "An unexpected error occurred."} and logged a stack
+     * trace at ERROR, for what are plain client mistakes. The module already
+     * handled the equivalent failure in the request BODY
+     * ({@code HttpMessageNotReadableException} → 400) and not in the path or the
+     * query string.
+     *
+     * <p><b>The accepted values are named for an enum, and that is not a leak.</b>
+     * {@code ServiceType}, {@code SettlementMethod} and {@code RechargeStatus}
+     * are part of the published contract — §6.1: "enums cross the wire as their
+     * string names" — so telling a client which ones exist tells it nothing it
+     * should not already know, and saves a round trip through the documentation.
+     *
+     * <p>What is NOT echoed is Spring's own message, which names Java classes and
+     * package paths. Same discipline as the body case: the message is replaced,
+     * never forwarded.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(
+            MethodArgumentTypeMismatchException ex) {
+        String traceId = newTraceId();
+        String message = describe(ex);
+        log.warn("[{}] 400 INVALID_REQUEST: {}", traceId, message);
+        return ResponseEntity.badRequest().body(new ErrorResponse(
+                ErrorCode.INVALID_REQUEST, "The request is not valid.", traceId,
+                List.of(new FieldError(ex.getName(), message)), null));
+    }
+
+    /**
+     * A sentence naming the parameter and what it will accept.
+     *
+     * <p>Deliberately specific per kind, because a counter that has just typed a
+     * filter wants to know what to type instead rather than that something was
+     * "invalid".
+     */
+    private static String describe(MethodArgumentTypeMismatchException ex) {
+        Class<?> required = ex.getRequiredType();
+        if (required == null) {
+            return "is not a value this parameter accepts";
+        }
+        if (required.isEnum()) {
+            return "must be one of: " + Arrays.stream(required.getEnumConstants())
+                    .map(c -> ((Enum<?>) c).name())
+                    .collect(Collectors.joining(", "));
+        }
+        if (LocalDate.class.equals(required)) {
+            return "must be a date in the form 2026-10-14";
+        }
+        if (Number.class.isAssignableFrom(required)
+                || int.class.equals(required) || long.class.equals(required)) {
+            return "must be a whole number";
+        }
+        return "is not a value this parameter accepts";
     }
 
     @ExceptionHandler({MissingServletRequestParameterException.class,
