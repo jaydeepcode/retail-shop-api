@@ -11,6 +11,18 @@ import java.util.Map;
  * <p>⚠ THIS IS WHAT THE SLICE'S GATE COMPARES TO THE DRAWER
  * (implementation-plan.md:125).
  *
+ * <p><b>⚠ COMPARE THE DRAWER AGAINST {@code totalCollected}, NOT
+ * {@code totalTakings}.</b>
+ *
+ * <pre>
+ * drawer  =  totalCollected  +  heldPending        where totalCollected = takings + surcharge
+ * </pre>
+ *
+ * <p>{@code totalTakings} is the recharge FACE VALUE and excludes the shop's own
+ * charge, which is its own income line by decision (log §10.2, §15.11). A screen
+ * comparing the drawer against takings alone shows a phantom shortfall of ₹10 per
+ * DTH recharge. {@code totalCollected} exists so that cannot happen.
+ *
  * <p>{@code heldPending} is the figure that explains the gap, and it comes from
  * the {@code RCHG_PENDING} account balance rather than from a status join (log
  * §7.2) — so it is reconcilable rather than merely displayed. The screen should
@@ -28,6 +40,7 @@ public record DaySummaryResponse(
         List<TakingsRow> takings,
         BigDecimal totalTakings,
         BigDecimal totalSurcharge,
+        BigDecimal totalCollected,
         Map<String, BigDecimal> tenderMix,
         long awaitingCount,
         long unresolvedFailureCount,

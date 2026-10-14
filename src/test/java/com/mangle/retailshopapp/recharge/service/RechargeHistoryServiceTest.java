@@ -32,6 +32,7 @@ import jakarta.persistence.EntityManager;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -186,6 +187,60 @@ class RechargeHistoryServiceTest {
             assertEquals(summary.tenderMix().get(SettlementMethod.CASH),
                     summary.totalTakings().add(summary.heldPending()),
                     "drawer = takings + held, exactly");
+        }
+
+        @Test
+        @DisplayName("⚠ the drawer identity holds WITH a surcharge — the case that was wrong")
+        void drawerIdentityWithSurcharge() {
+            // THE TEST THAT WAS MISSING, and the defect it would have caught.
+            //
+            // This slice's notes, PR and plan all stated the identity as
+            // `drawer = totalTakings + heldPending`. That balances only when
+            // every surcharge is zero — which is true of the mobile-only fixture
+            // in failureExplainsTheGap, and false on any day carrying a DTH sale.
+            // A Rs 240 Dish TV recharge with the Rs 10 fee puts Rs 250 in the
+            // drawer while totalTakings reports Rs 240, because takings are the
+            // recharge FACE VALUE and the surcharge is its own income line by
+            // decision (log §10.2, §15.11).
+            //
+            // Found by driving a real sale through a running server. Two correct
+            // tests existed either side of it: one asserted the identity without
+            // a surcharge, one asserted the surcharge totals without the
+            // identity. Neither covered the gap.
+            var completed = settle(ServiceType.TV, "DISHTV", "240.00", "key-ident-1");
+            fulfilment.markCompleted(completed.recharges().get(0).getRechargeId(),
+                    null, null, staffUserId);
+
+            var held = settle(ServiceType.TV, "DISHTV", "200.00", "key-ident-2");
+            fulfilment.markFailed(held.recharges().get(0).getRechargeId(),
+                    "operator declined", staffUserId);
+
+            var summary = history.daySummary(LocalDate.now());
+
+            assertEquals(new BigDecimal("240.00"), summary.totalTakings(),
+                    "face value of the completed recharge");
+            assertEquals(new BigDecimal("10.00"), summary.totalSurcharge(),
+                    "and its surcharge, reported apart");
+            assertEquals(new BigDecimal("250.00"), summary.totalCollected(),
+                    "what the customer actually handed over");
+            assertEquals(new BigDecimal("210.00"), summary.heldPending(),
+                    "the failed basket's 200 + 10 is still held");
+
+            BigDecimal drawer = summary.tenderMix().get(SettlementMethod.CASH);
+            assertEquals(new BigDecimal("460.00"), drawer, "both baskets were paid for");
+
+            // ⚠ THE WRONG FORM, asserted as wrong so nobody restores it.
+            assertNotEquals(drawer, summary.totalTakings().add(summary.heldPending()),
+                    "takings + held omits the surcharge and is 10 short - this is the "
+                            + "formula the close screen must NOT use");
+
+            // The right one.
+            assertEquals(drawer, summary.totalCollected().add(summary.heldPending()),
+                    "drawer = totalCollected + heldPending");
+            assertEquals(drawer,
+                    summary.totalTakings().add(summary.totalSurcharge())
+                            .add(summary.heldPending()),
+                    "and the same thing written out in three terms");
         }
 
         @Test

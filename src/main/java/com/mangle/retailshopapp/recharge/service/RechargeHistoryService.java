@@ -172,6 +172,32 @@ public class RechargeHistoryService {
      * (implementation-plan.md:125), so the two rules below are not presentation
      * choices.
      *
+     * <p><b>⚠ THE IDENTITY, AND A CORRECTION WORTH READING BEFORE TRUSTING AN
+     * EARLIER ONE.</b> The drawer reconciles like this:
+     *
+     * <pre>
+     * drawer  =  totalTakings  +  totalSurcharge  +  heldPending
+     * </pre>
+     *
+     * <p>This slice's own notes, PR and plan all stated it as
+     * {@code drawer = totalTakings + heldPending}, omitting the surcharge. That
+     * is wrong on any day carrying a DTH sale, which is most days: a ₹240 Dish TV
+     * recharge with the ₹10 fee puts ₹250 in the drawer while {@code totalTakings}
+     * reports ₹240, because takings are the recharge FACE VALUE and the surcharge
+     * is deliberately its own income line (log §10.2, §15.11). A close screen
+     * built on the two-term form shows a phantom shortfall of ₹10 per DTH
+     * recharge — and FY2026-27 carried ₹2,957 of surcharge, so it would be wrong
+     * every day.
+     *
+     * <p>It was found by driving a real sale through a running server, not by any
+     * test: the unit test asserting the identity used two MOBILE recharges, where
+     * the surcharge term is zero and the wrong formula happens to balance. Two
+     * correct tests with an unasserted gap between them.
+     *
+     * <p>{@code totalCollected} is the defence rather than the fix: it carries
+     * {@code totalTakings + totalSurcharge} so a client has one number to compare
+     * and no arithmetic to get wrong.
+     *
      * <p><b>Takings count COMPLETED recharges only</b> (requirement 6,
      * design-domain.md §5.2). That is also what makes {@code VOIDED} work: a
      * voided sale drops out for free, because the query already filters on the
@@ -223,11 +249,20 @@ public class RechargeHistoryService {
             }
         }
 
+        BigDecimal totalTakings = takings.stream()
+                .map(TakingsRow::amount).reduce(ZERO, BigDecimal::add);
+        BigDecimal totalSurcharge = takings.stream()
+                .map(TakingsRow::surcharge).reduce(ZERO, BigDecimal::add);
+
         return new DaySummary(
                 day,
                 takings,
-                takings.stream().map(TakingsRow::amount).reduce(ZERO, BigDecimal::add),
-                takings.stream().map(TakingsRow::surcharge).reduce(ZERO, BigDecimal::add),
+                totalTakings,
+                totalSurcharge,
+                // What the customer actually handed over for the completed
+                // recharges. Derived here rather than by the client, because
+                // getting it wrong is exactly what happened — see the javadoc.
+                totalTakings.add(totalSurcharge),
                 tenderMix,
                 awaiting,
                 failed,
@@ -268,9 +303,16 @@ public class RechargeHistoryService {
                              BigDecimal amount, BigDecimal surcharge) {
     }
 
-    /** The end-of-day read. */
+    /**
+     * The end-of-day read.
+     *
+     * <p>{@code totalCollected} exists so the close screen has ONE number to
+     * compare against the drawer, and the reason is a defect this record caused.
+     * See {@link #daySummary(LocalDate)} for the identity and what went wrong.
+     */
     public record DaySummary(LocalDate date, List<TakingsRow> takings,
                              BigDecimal totalTakings, BigDecimal totalSurcharge,
+                             BigDecimal totalCollected,
                              Map<SettlementMethod, BigDecimal> tenderMix,
                              long awaitingCount, long unresolvedFailureCount,
                              BigDecimal heldPending) {
