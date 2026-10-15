@@ -1,0 +1,159 @@
+package com.mangle.retailshopapp.recharge.service;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.mangle.retailshopapp.credit.model.RcCreditReq;
+import com.mangle.retailshopapp.credit.repo.RcCreditReqRepository;
+import com.mangle.retailshopapp.recharge.domain.Outstanding;
+import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
+import com.mangle.retailshopapp.recharge.repo.CreditBookRepository;
+
+/**
+ * The append-only credit tally (design-api.md §5.1).
+ *
+ * <p>⚠ THIS CLASS IS WHERE "A CREDIT ROW CANNOT EXIST WITHOUT AN IDENTIFIED,
+ * NON-LEDGER CUSTOMER" BECOMES UNBYPASSABLE. §5.3 asks for the rule in TWO
+ * layers on purpose: {@code SettlementPlan} catches the structural case and gives
+ * a good message, and this service enforces it again at the lowest level so no
+ * future caller can bypass it. The first makes it pleasant; the second makes it
+ * true.
+ *
+ * <p><b>Append-only is what makes the settle transaction safe.</b> §4.3 step 7 is
+ * an INSERT, never a read-modify-write of a stored balance, so a credit cannot be
+ * lost or double-applied — and there is nothing to lock. §4.4 is explicit that a
+ * pessimistic lock must NOT be added around the balance read: the figure shown at
+ * basket time is advisory, there is no credit limit to enforce (FRD §8.7: "no
+ * credit limit, purely manual, trust-based"), so there is nothing to
+ * check-then-act on and no lost-update risk.
+ *
+ * <p>{@code DBT} is stored NEGATIVE and {@code DPAM} positive, matching seven
+ * years of history exactly. {@link Outstanding} is the only place that convention
+ * is turned into a number a screen can show.
+ */
+@Service
+public class CreditLedgerService {
+
+    /** A charge against the tab. Stored negative, as all 2,844 historical rows are. */
+    private static final String TYPE_DEBIT = "DBT";
+
+    /** A payment against the tab. Stored positive. */
+    private static final String TYPE_PAYMENT = "DPAM";
+
+    private final RcCreditReqRepository creditRequests;
+    private final CreditBookRepository creditBook;
+    private final CustomerDirectoryService customers;
+    private final SettingService settings;
+
+    public CreditLedgerService(RcCreditReqRepository creditRequests,
+                               CreditBookRepository creditBook,
+                               CustomerDirectoryService customers,
+                               SettingService settings) {
+        this.creditRequests = creditRequests;
+        this.creditBook = creditBook;
+        this.customers = customers;
+        this.settings = settings;
+    }
+
+    /**
+     * Appends a charge, attributed to the staff member who extended it.
+     *
+     * <p>⚠ {@code extendedBy} IS THE AUTHORISATION CONTROL, not metadata. §3.5:
+     * requirement 9 means no per-row authorisation at all — all staff see all
+     * transactions and any staff member may extend credit — so "the control is
+     * the record: {@code extendedBy}, {@code extendedAt}, {@code note} taken from
+     * {@code Principal}." Do not add a permission check here; add the record.
+     *
+     * @param customerId must resolve to a real, non-ledger customer
+     * @throws CreditRequiresCustomerException 422 when it does not
+     */
+    @Transactional
+    public RcCreditReq extendCredit(Integer customerId, BigDecimal amount, Integer extendedBy,
+                                    String note, Integer txnId, LocalDateTime when) {
+        if (customerId == null) {
+            throw new CreditRequiresCustomerException();
+        }
+        if (amount == null || amount.signum() <= 0) {
+            throw new CreditRequiresCustomerException(
+                    "A credit line must be a positive amount; got " + amount + ".");
+        }
+        // The low-level enforcement §5.3 asks for. It throws CustomerNotFound for
+        // a missing row or a ledger account; translated here so the caller sees
+        // the rule that was broken rather than the lookup that failed.
+        try {
+            customers.requireCreditable(customerId);
+        } catch (RuntimeException e) {
+            throw new CreditRequiresCustomerException(
+                    "Credit cannot be extended to customer " + customerId + ": " + e.getMessage());
+        }
+
+        RcCreditReq row = new RcCreditReq();
+        row.setCustId(customerId);
+        row.setCredDttm(when);
+        row.setReqType(TYPE_DEBIT);
+        // Negative, matching every historical DBT row. Outstanding is what turns
+        // this back into "owes Rs 49" for a screen.
+        row.setReqAmt(amount.negate());
+        row.setCreBy(extendedBy);
+        row.setNote(note);
+        row.setTxnId(txnId);
+        return creditRequests.save(row);
+    }
+
+    /**
+     * Appends a payment against the tab.
+     *
+     * <p>Clears OLDEST FIRST across the whole tab, with no business picker and no
+     * per-charge allocation (log §14.8) — which needs no code here, because a
+     * single-sided tally consumed FIFO is what oldest-first MEANS. A surplus
+     * simply leaves the balance positive and {@link Outstanding} reports it as an
+     * advance held.
+     *
+     * <p>"Exceeds outstanding" is deliberately not refused (log §2.8): ₹120 owed,
+     * the customer hands over ₹200, ₹80 is held against future trips, "decided by
+     * arithmetic rather than by asking the staff member".
+     */
+    @Transactional
+    public RcCreditReq receivePayment(Integer customerId, BigDecimal amount, Integer receivedBy,
+                                      String note, Integer txnId, LocalDateTime when) {
+        customers.requireCreditable(customerId);
+
+        RcCreditReq row = new RcCreditReq();
+        row.setCustId(customerId);
+        row.setCredDttm(when);
+        row.setReqType(TYPE_PAYMENT);
+        row.setReqAmt(amount);
+        row.setCreBy(receivedBy);
+        row.setNote(note);
+        row.setTxnId(txnId);
+        return creditRequests.save(row);
+    }
+
+    /**
+     * One customer's netted position.
+     *
+     * <p>Read inside the caller's transaction when it follows a write, so the
+     * number the staff member sees is the number that was committed (§4.3 step 8).
+     */
+    @Transactional(readOnly = true)
+    public Outstanding positionOf(int customerId) {
+        var rows = creditBook.positionOf(customerId);
+        if (rows.isEmpty()) {
+            return Outstanding.clear();
+        }
+        Object[] row = rows.get(0);
+        BigDecimal tally = row[0] == null ? BigDecimal.ZERO : (BigDecimal) row[0];
+        LocalDateTime oldestOpen = row[1] == null ? null : ((java.sql.Timestamp) row[1]).toLocalDateTime();
+        return Outstanding.fromTally(tally.setScale(2), oldestOpen);
+    }
+
+    /** The 30-day flag, computed server-side so two clients cannot disagree (§3.3). */
+    @Transactional(readOnly = true)
+    public boolean warns(Outstanding position, LocalDate today) {
+        return position.warn(today, settings.getInt(SettingService.CREDIT_WARNING_DAYS, 30));
+    }
+}

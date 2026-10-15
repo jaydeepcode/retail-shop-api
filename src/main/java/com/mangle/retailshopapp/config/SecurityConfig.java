@@ -64,7 +64,51 @@ public class SecurityConfig {
                         .requestMatchers("/customer/**").hasAnyRole("ADMIN", "CUSTOMER")
                         .requestMatchers("/motor/status").hasAnyRole("ADMIN", "CUSTOMER")
                         .requestMatchers("/motor/pump/**").hasAnyRole("ADMIN", "CUSTOMER")
-                        
+
+                        // The recharge counter (design-api.md §3.5, log §15.11).
+                        //
+                        // ⚠ ADMIN and USER, not §3.5's ADMIN and STAFF. ROLE_USER
+                        // ALREADY IS the staff role: measured on the restore
+                        // 2026-10-12, the only values in rc_user.roles are
+                        // ROLE_ADMIN|ROLE_USER (6, the owner), ROLE_USER (2,
+                        // working staff) and ROLE_CUSTOMER (2, water customers
+                        // who start pumps from the mobile app). So this admits
+                        // the owner and staff and excludes customers, and
+                        // ROLE_STAFF is never created.
+                        //
+                        // Verified safe two ways: no user carries both
+                        // ROLE_CUSTOMER and ROLE_USER, and
+                        // CustomerRegistrationService.createCustomerUser assigns
+                        // List.of("ROLE_CUSTOMER") and nothing else, so the public
+                        // /customer/register path cannot mint an account that
+                        // reaches the counter.
+                        //
+                        // ONE FRAGILITY, recorded rather than fixed: ROLE_USER is
+                        // a generic name, so if anything ever grants it to a
+                        // customer-facing account this API opens up. Nothing does
+                        // today. Introducing ROLE_STAFF is the fix if that
+                        // changes.
+                        //
+                        // It must stay ABOVE anyRequest(): the matchers are
+                        // evaluated in order, so below the fallthrough it would
+                        // never be reached and a ROLE_CUSTOMER token would read
+                        // the entire counter API including the credit book.
+                        //
+                        // No @PreAuthorize anywhere in the module. §3.5 is
+                        // explicit that requirement 9 — all staff see all
+                        // transactions, any staff member may extend credit —
+                        // means NO per-row authorisation. The control is the
+                        // record: extendedBy, extendedAt and note taken from
+                        // Principal.
+                        .requestMatchers("/recharge/**")
+                                .hasAnyAuthority(SecurityConstants.ADMIN_USER,
+                                                 SecurityConstants.NORMAL_USER)
+
+                        // ⚠ STILL OUTSTANDING, and S3 does not close it: 23 of the
+                        // endpoints below fall through to authenticated-only, which
+                        // is S0b's deny-by-default work (implementation-plan.md
+                        // §0.3). S3 closes its own door and leaves the rest where
+                        // it is.
                         .anyRequest().authenticated())
                 .sessionManagement((sessionManagement) -> sessionManagement
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS));
