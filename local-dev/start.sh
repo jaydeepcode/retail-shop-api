@@ -63,10 +63,43 @@ echo ' up on http://localhost:8080/api'
 # staff role (log §15.11) — there is no ROLE_STAFF and one must not be created.
 say "3/4  Staff login"
 HASH=$(htpasswd -nbBC 10 x "$PASSWORD" | cut -d: -f2)
-docker exec s3-counter-db mysql -uCISADM -ps3pass recharge -e "
+
+# ⚠ NOT `2>/dev/null`, AND THE LOGIN IS PROVEN RATHER THAN ANNOUNCED.
+#
+# The first version of this script hid the insert's stderr and then printed the
+# credentials unconditionally, so a failed insert produced a script that said
+# "counterstaff / counter123" and a sign-in page that said "invalid username or
+# password" — with nothing anywhere to connect the two. That is the whole class
+# of bug this project keeps finding: reporting success that was never checked.
+#
+# ON CONFLICT is deliberate: re-running start.sh against a database that already
+# has the user should reset the password rather than fail, because the password
+# is generated fresh each run.
+# ⚠ The status tested is mysql's, NOT a filter's. Writing this as
+#     if ! mysql ... 2>&1 | grep -v Warning; then
+# tests GREP's status, and grep exits 1 when it filters everything out — so a
+# SUCCESSFUL insert reported failure. Caught by running it.
+if ! insert_out=$(docker exec s3-counter-db mysql -uCISADM -ps3pass recharge -e "
   INSERT INTO rc_user (USER_NAME, PASSWORD, ROLES, ACCOUNT_STATUS, CREATED_DATE)
-  VALUES ('$USERNAME', '$HASH', 'ROLE_ADMIN|ROLE_USER', 'ACTIVE', NOW());" 2>/dev/null
-echo "     $USERNAME / $PASSWORD"
+  VALUES ('$USERNAME', '$HASH', 'ROLE_ADMIN|ROLE_USER', 'ACTIVE', NOW())
+  ON DUPLICATE KEY UPDATE PASSWORD=VALUES(PASSWORD), ROLES=VALUES(ROLES),
+                          ACCOUNT_STATUS=VALUES(ACCOUNT_STATUS);" 2>&1); then
+  printf '%s\n' "$insert_out" | grep -v '^mysql: \[Warning\]' | sed 's/^/       /'
+  echo "     could not create the staff user"; exit 1
+fi
+
+# Prove it. A login that works is the only evidence worth printing.
+if ! curl -sf -X POST http://localhost:8080/api/authenticate \
+     -H 'Content-Type: application/json' \
+     -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" \
+     >/dev/null 2>&1; then
+  echo "     the user was created but cannot sign in."
+  echo "     rc_user now holds:"
+  docker exec s3-counter-db mysql -uCISADM -ps3pass recharge \
+    -e "SELECT id, USER_NAME, ROLES, ACCOUNT_STATUS FROM rc_user;" 2>/dev/null | sed 's/^/       /'
+  exit 1
+fi
+echo "     $USERNAME / $PASSWORD  (sign-in verified)"
 
 # ---------------------------------------------------------------- screens
 if [ -n "$WEB" ] && [ -d "$WEB" ]; then
