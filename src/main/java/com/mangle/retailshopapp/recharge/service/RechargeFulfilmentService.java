@@ -7,7 +7,9 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.mangle.retailshopapp.recharge.domain.FailureResolution;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
+import com.mangle.retailshopapp.recharge.exception.FailureAlreadyResolvedException;
 import com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionException;
 import com.mangle.retailshopapp.recharge.exception.ReasonRequiredException;
 import com.mangle.retailshopapp.recharge.exception.RechargeNotFound;
@@ -225,6 +227,48 @@ public class RechargeFulfilmentService {
         // VOIDED is reachable only from COMPLETED, so there is always a
         // completion voucher to take back.
         ledger.reverseCompletion(recharge, staffUserId, reason.trim(), now);
+        return recharge;
+    }
+
+    /**
+     * Moves a failure to one of its two resolved statuses (§3.2 #12, #13).
+     *
+     * <p>⚠ THE STATUS MOVE LIVES HERE RATHER THAN IN THE RESOLUTION SERVICE, so
+     * that every mutation of {@code rc_recharge.STATUS_CODE} still goes through
+     * one method. §5.4's history row and the §2.2(3) open-attempt check come free
+     * that way; a second mutation path would have had to remember both, and
+     * review finding 11 was about exactly that kind of rule living in a place
+     * nothing consults.
+     *
+     * <p>{@code RETRIED} and {@code REFUNDED} are both terminal, so the
+     * open-attempt check passes trivially for the row being closed — it is the
+     * RETRY inserted afterwards that the check is really about, and that row
+     * reaches it through {@link #markCompleted} or {@link #markFailed} later.
+     *
+     * <p>An already-resolved failure is a 409 naming WHICH resolution it got,
+     * rather than the generic transition error: "{@code RETRIED → REFUNDED} is
+     * illegal" is true but tells the counter nothing it can act on, while
+     * "recharge 99051 was already retried" tells it to go and look at the retry.
+     *
+     * @throws FailureAlreadyResolvedException 409 — already retried or refunded
+     * @throws IllegalStatusTransitionException 409 — not a failure at all
+     */
+    @Transactional
+    public RcRecharge resolveFailure(long rechargeId, RechargeStatus to, Integer staffUserId,
+                                     String reason) {
+        if (to != RechargeStatus.RETRIED && to != RechargeStatus.REFUNDED) {
+            throw new IllegalArgumentException(
+                    "resolveFailure moves a failure to RETRIED or REFUNDED; got " + to);
+        }
+        RcRecharge recharge = lockOrThrow(rechargeId);
+
+        FailureResolution already = FailureResolution.of(recharge.getStatusCode());
+        if (already.isResolved()) {
+            throw new FailureAlreadyResolvedException(rechargeId, already);
+        }
+        assertLegal(recharge, to);
+
+        apply(recharge, to, staffUserId, reason, LocalDateTime.now(clock));
         return recharge;
     }
 

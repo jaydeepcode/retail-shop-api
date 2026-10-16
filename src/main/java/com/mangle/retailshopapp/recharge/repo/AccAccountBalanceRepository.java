@@ -68,4 +68,27 @@ public interface AccAccountBalanceRepository extends Repository<AccAccount, Stri
             + "   AND v.VOUCHER_DATE = :day "
             + "   AND l.ACCOUNT_CODE = :code", nativeQuery = true)
     BigDecimal movementOn(@Param("code") String code, @Param("day") LocalDate day);
+
+    /**
+     * One account's CREDIT movement alone on one accounting date.
+     *
+     * <p>⚠ MONEY GOING OUT CANNOT BE READ FROM THE TENDER LINES, which is why
+     * this exists alongside {@link #movementOn}. {@code rc_txn_payment} records
+     * what was COLLECTED — {@code ck_txnpay_amount CHECK (AMOUNT > 0)} makes a
+     * negative tender line unrepresentable — so a refund or a retry residual
+     * leaves the ledger and the tender lines genuinely, correctly apart. The day
+     * summary needs the outgoing side as its own term to state the relation
+     * between them, rather than reporting two figures that no longer match and
+     * calling the difference a posting error.
+     *
+     * <p>Same date and sealed-only rules as {@link #movementOn}, for the same
+     * reasons.
+     */
+    @Query(value = "SELECT COALESCE(SUM(l.CR_AMOUNT), 0) "
+            + "  FROM acc_voucher_line l "
+            + "  JOIN acc_voucher v ON v.VOUCHER_ID = l.VOUCHER_ID "
+            + " WHERE v.SEALED_AT IS NOT NULL "
+            + "   AND v.VOUCHER_DATE = :day "
+            + "   AND l.ACCOUNT_CODE = :code", nativeQuery = true)
+    BigDecimal paidOutOn(@Param("code") String code, @Param("day") LocalDate day);
 }

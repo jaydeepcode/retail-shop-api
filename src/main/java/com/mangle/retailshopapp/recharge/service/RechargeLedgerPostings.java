@@ -21,6 +21,8 @@ import com.mangle.retailshopapp.accounting.repo.AccAccountRepository;
 import com.mangle.retailshopapp.accounting.repo.AccVoucherLineRepository;
 import com.mangle.retailshopapp.accounting.repo.AccVoucherRepository;
 import com.mangle.retailshopapp.recharge.domain.FloatConsumption;
+import com.mangle.retailshopapp.recharge.domain.ResidualMode;
+import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
 import com.mangle.retailshopapp.recharge.exception.NoCommissionRateException;
@@ -80,6 +82,7 @@ public class RechargeLedgerPostings {
     static final String CASH_RECHARGE = "CASH_RECHARGE";
     static final String UPI_CLEARING = "UPI_CLEARING";
     static final String AR_RECHARGE = "AR_RECHARGE";
+    static final String ADV_RECHARGE = "ADV_RECHARGE";
     static final String RCHG_PENDING = "RCHG_PENDING";
     static final String INC_RCHG_COMM = "INC_RCHG_COMM";
     static final String INC_RCHG_SURCHARGE = "INC_RCHG_SURCHARGE";
@@ -87,7 +90,10 @@ public class RechargeLedgerPostings {
     private static final String SOURCE_RECHARGE_SALE = "RECHARGE_SALE";
     private static final String TYPE_SALES = "SALES";
     private static final String TYPE_JOURNAL = "JOURNAL";
+    private static final String TYPE_PAYMENT = "PAYMENT";
+    private static final String TYPE_RECEIPT = "RECEIPT";
     private static final String SOURCE_CORRECTION = "CORRECTION";
+    private static final String SOURCE_REFUND = "REFUND";
 
     /**
      * {@code WA = 1.0} for every wallet the shop holds.
@@ -370,6 +376,136 @@ public class RechargeLedgerPostings {
                 mirrored);
 
         return ledger.post(draft);
+    }
+
+    /**
+     * Money stops being held: the residual of a lower retry, or a refund
+     * (log §7.4, §7.3).
+     *
+     * <p><b>⚠ NOTHING IS REVERSED HERE, and working out why is the whole
+     * saving.</b> Under §7.2 a failed recharge never consumed float and never
+     * recognised income — "FAILED needs no reversing entry at all. The money
+     * simply stays in {@code RCHG_PENDING}." So this is not a correction of an
+     * earlier posting; it is the second half of a sale that was always going to
+     * have one. §7.3 states the refund voucher in exactly this form and calls it
+     * "now trivial".
+     *
+     * <p>The four paths that reach this method, and what each has already done:
+     *
+     * <ol>
+     *   <li><b>retry at a lower amount</b> — nothing posted at retry time; this
+     *       settles what the retry will not consume;
+     *   <li><b>refund after {@code AWAITING_RECHARGE → FAILED}</b> — nothing was
+     *       ever posted beyond stage one;
+     *   <li><b>refund after {@code COMPLETED → FAILED}</b> — the completion was
+     *       already reversed by {@link #reverseCompletion} when the status moved,
+     *       so the money is back in {@code RCHG_PENDING} and this is again the
+     *       only posting left;
+     *   <li><b>a {@code VOIDED} sale's residual</b> — same as (3). §7.4:
+     *       "Decisions 1 and 4 converge on one screen and one posting rule."
+     * </ol>
+     *
+     * <p>None of the four needs a reversal written here, and a second one in
+     * case (3) would take the income back twice.
+     *
+     * <p>The credit side is fixed by the mode and never by the caller's opinion
+     * (§7.4's table). A {@code PAYMENT} voucher rather than a {@code JOURNAL}:
+     * money genuinely leaves, which is what {@code ref_voucher_type}'s "Money
+     * paid out" is, and a journal would file an ordinary refund as a correction.
+     *
+     * @param customerId required by both non-cash modes, whose accounts carry
+     *                   {@code REQUIRES_PARTY = TRUE}
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PostedVoucher postResidual(long failedRechargeId, BigDecimal amount, ResidualMode mode,
+                                      Integer customerId, Integer staffUserId, String narration,
+                                      LocalDateTime when) {
+        VoucherLeg credit = switch (mode) {
+            case CASH -> VoucherLeg.credit(CASH_RECHARGE, amount)
+                    .withPaymentMethod(SettlementMethod.CASH.lineType());
+            case KEEP_AS_ADVANCE -> VoucherLeg.credit(ADV_RECHARGE, amount).withParty(customerId);
+            case CREDIT_REDUCTION -> VoucherLeg.credit(AR_RECHARGE, amount).withParty(customerId);
+        };
+
+        VoucherDraft draft = new VoucherDraft(
+                TYPE_PAYMENT,
+                when.toLocalDate(),
+                when,
+                narration,
+                SOURCE_REFUND,
+                "rc_recharge#" + failedRechargeId,
+                residualKey(failedRechargeId),
+                null,
+                staffUserId,
+                List.of(VoucherLeg.debit(RCHG_PENDING, amount), credit));
+
+        return ledger.post(draft);
+    }
+
+    /**
+     * More money comes in, because the retry costs more than was collected
+     * (log §7.4's "opposite direction").
+     *
+     * <p>§7.4 describes this as the retry's completion debiting
+     * {@code RCHG_PENDING 600} "plus the extra ₹50 from {@code CASH_RECHARGE}
+     * (collected now) or {@code AR_RECHARGE} (owed)" — one voucher drawing on two
+     * sources. <b>It is posted here as the mirror of the residual instead</b>:
+     * the extra is taken into {@code RCHG_PENDING} now, and the retry's
+     * completion then draws its whole line total from that one account like any
+     * other recharge. The two forms put identical net amounts in identical
+     * accounts; this one leaves {@link #postCompletion} untouched, which is what
+     * §7.2 means by "keying the second on the recharge row … makes a retry's
+     * completion a distinct post with no special-casing".
+     *
+     * <p>A {@code RECEIPT} voucher, and the method is one of the three the settle
+     * path already supports rather than the two §7.4 names — the tender line and
+     * the debit leg are the same machinery as {@link #postSettlement}, so a
+     * customer topping up by UPI costs nothing extra to accept.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PostedVoucher postTopUp(long failedRechargeId, BigDecimal amount,
+                                   SettlementMethod method, Integer customerId,
+                                   Integer staffUserId, String narration, LocalDateTime when) {
+        VoucherLeg debit = switch (method) {
+            case CASH -> VoucherLeg.debit(CASH_RECHARGE, amount)
+                    .withPaymentMethod(method.lineType());
+            case UPI -> VoucherLeg.debit(UPI_CLEARING, amount)
+                    .withPaymentMethod(method.lineType());
+            case CREDIT -> VoucherLeg.debit(AR_RECHARGE, amount)
+                    .withParty(customerId)
+                    .withPaymentMethod(method.lineType());
+        };
+
+        VoucherDraft draft = new VoucherDraft(
+                TYPE_RECEIPT,
+                when.toLocalDate(),
+                when,
+                narration,
+                SOURCE_RECHARGE_SALE,
+                "rc_recharge#" + failedRechargeId,
+                topUpKey(failedRechargeId),
+                null,
+                staffUserId,
+                List.of(debit, VoucherLeg.credit(RCHG_PENDING, amount)));
+
+        return ledger.post(draft);
+    }
+
+    /**
+     * {@code REFUND:rc_recharge#<id>:RESIDUAL} — keyed on the FAILED recharge.
+     *
+     * <p>Keyed on the failure rather than on the retry that may follow it,
+     * because all four paths into {@link #postResidual} have a failed recharge
+     * and only one of them has a retry. V29's unique key makes one failure
+     * resolvable once, so this key is unique by the same guarantee.
+     */
+    static String residualKey(long failedRechargeId) {
+        return SOURCE_REFUND + ":rc_recharge#" + failedRechargeId + ":RESIDUAL";
+    }
+
+    /** {@code RECHARGE_SALE:rc_recharge#<id>:TOPUP}, keyed on the failed recharge. */
+    static String topUpKey(long failedRechargeId) {
+        return SOURCE_RECHARGE_SALE + ":rc_recharge#" + failedRechargeId + ":TOPUP";
     }
 
     /**

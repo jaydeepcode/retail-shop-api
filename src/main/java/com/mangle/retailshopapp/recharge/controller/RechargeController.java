@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.validation.annotation.Validated;
 
+import com.mangle.retailshopapp.credit.repo.RcTxnHeaderRepository;
 import com.mangle.retailshopapp.customer.model.CustomerDetails;
 import com.mangle.retailshopapp.recharge.domain.FinancialYear;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
@@ -33,6 +34,8 @@ import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.request.MarkCompleteRequest;
 import com.mangle.retailshopapp.recharge.model.request.MarkFailedRequest;
 import com.mangle.retailshopapp.recharge.model.request.CreateCustomerRequest;
+import com.mangle.retailshopapp.recharge.model.request.RefundRechargeRequest;
+import com.mangle.retailshopapp.recharge.model.request.RetryRechargeRequest;
 import com.mangle.retailshopapp.recharge.model.request.SettleBasketRequest;
 import com.mangle.retailshopapp.recharge.model.request.VoidRechargeRequest;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse;
@@ -44,16 +47,21 @@ import com.mangle.retailshopapp.recharge.model.response.DaySummaryResponse;
 import com.mangle.retailshopapp.recharge.model.response.HistoryPageResponse;
 import com.mangle.retailshopapp.recharge.model.response.NumberHintResponse;
 import com.mangle.retailshopapp.recharge.model.response.PageResponse;
+import com.mangle.retailshopapp.recharge.model.response.RefundResponse;
+import com.mangle.retailshopapp.recharge.model.response.RetryRechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.TvConnectionResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeWorkItemResponse;
 import com.mangle.retailshopapp.recharge.model.response.TransactionResponse;
+import com.mangle.retailshopapp.recharge.exception.DuplicateRetryException;
 import com.mangle.retailshopapp.recharge.repo.RechargeOpenItemsRepository;
 import com.mangle.retailshopapp.recharge.service.CounterEntryService;
 import com.mangle.retailshopapp.recharge.service.CreditLedgerService;
 import com.mangle.retailshopapp.recharge.service.CustomerDirectoryService;
 import com.mangle.retailshopapp.recharge.service.FinancialYears;
 import com.mangle.retailshopapp.recharge.service.OperatorConfigService;
+import com.mangle.retailshopapp.recharge.service.RechargeFailureResolutionService;
+import com.mangle.retailshopapp.recharge.service.RechargeFailureResolutionService.Settlement;
 import com.mangle.retailshopapp.recharge.service.RechargeFulfilmentService;
 import com.mangle.retailshopapp.recharge.service.RechargeHistoryService;
 import com.mangle.retailshopapp.recharge.service.RechargeResponseMapper;
@@ -97,10 +105,10 @@ import java.security.Principal;
  * straight from a controller with no service and no transaction. Nothing here
  * writes.
  *
- * <p><b>This slice ships 15 of §3.2's 19 endpoints.</b> Everything the counter,
- * the worklist, history and the end-of-day read need. The four left are the
- * failure-resolution pair (#12 retry, #13 refund) and the credit book (#14-#16),
- * each listed in the PR rather than left to be discovered.
+ * <p><b>This slice ships 17 of §3.2's 19 endpoints.</b> Everything the counter,
+ * the worklist, history, the end-of-day read and resolving a failure. The two
+ * left are the credit book's list and statement (#14-#15) and its settlement
+ * endpoint (#16), listed in the PR rather than left to be discovered.
  */
 @RestController
 @RequestMapping("/recharge")
@@ -109,6 +117,7 @@ public class RechargeController {
 
     private final RechargeSettlementService settlement;
     private final RechargeFulfilmentService fulfilment;
+    private final RechargeFailureResolutionService resolution;
     private final CounterEntryService entry;
     private final RechargeHistoryService historyService;
     private final CreditLedgerService credit;
@@ -116,12 +125,14 @@ public class RechargeController {
     private final CustomerDirectoryService customers;
     private final RechargeResponseMapper mapper;
     private final RechargeOpenItemsRepository openItems;
+    private final RcTxnHeaderRepository headers;
     private final FinancialYears financialYears;
     private final UserRepository users;
     private final Clock clock;
 
     public RechargeController(RechargeSettlementService settlement,
                               RechargeFulfilmentService fulfilment,
+                              RechargeFailureResolutionService resolution,
                               CounterEntryService entry,
                               RechargeHistoryService historyService,
                               CreditLedgerService credit,
@@ -129,11 +140,13 @@ public class RechargeController {
                               CustomerDirectoryService customers,
                               RechargeResponseMapper mapper,
                               RechargeOpenItemsRepository openItems,
+                              RcTxnHeaderRepository headers,
                               FinancialYears financialYears,
                               UserRepository users,
                               Clock clock) {
         this.settlement = settlement;
         this.fulfilment = fulfilment;
+        this.resolution = resolution;
         this.entry = entry;
         this.historyService = historyService;
         this.credit = credit;
@@ -141,6 +154,7 @@ public class RechargeController {
         this.customers = customers;
         this.mapper = mapper;
         this.openItems = openItems;
+        this.headers = headers;
         this.financialYears = financialYears;
         this.users = users;
         this.clock = clock;
@@ -358,6 +372,78 @@ public class RechargeController {
     }
 
     // ------------------------------------------------------------------
+    // #12, #13 — resolving a failure (requirement 5)
+    // ------------------------------------------------------------------
+
+    /**
+     * Retry a failed recharge under the ORIGINAL payment (#12).
+     *
+     * <p>⚠ NO {@code Idempotency-Key} HEADER, and that is §7.2's decision rather
+     * than an omission: #12 "is guarded by the unique retry key". V29 adds the
+     * key V12 left non-unique, so a double-click reaches the database and is
+     * refused there as a 409 rather than being deduplicated in the application.
+     *
+     * <p>The difference, in whichever direction it falls, is settled in THIS
+     * call. §3.3: "which is what keeps it in one transaction."
+     */
+    @PostMapping("/recharges/{rechargeId}/retry")
+    public ResponseEntity<RetryRechargeResponse> retry(
+            @PathVariable long rechargeId,
+            @Valid @RequestBody RetryRechargeRequest request,
+            Principal principal) {
+
+        var difference = request.differenceSettlement() == null ? null
+                : new Settlement(request.differenceSettlement().mode(),
+                        request.differenceSettlement().customerId(),
+                        request.differenceSettlement().note());
+        var topUp = request.topUp() == null ? null
+                : new Settlement(null, request.topUp().method(),
+                        request.topUp().customerId(), request.topUp().note());
+
+        try {
+            var retried = resolution.retry(rechargeId, request.amount(), difference, topUp,
+                    staffIdOf(principal));
+            RetryRechargeResponse body = mapper.toRetry(retried,
+                    customerOf(retried.creditPosition(), retried.retry().getTxnId()),
+                    LocalDate.now(clock));
+            return ResponseEntity
+                    .created(URI.create("/recharge/recharges/" + retried.retry().getRechargeId()))
+                    .body(body);
+        } catch (DataIntegrityViolationException e) {
+            // uq_rech_retry. The row that lost the race is the one that gets
+            // this, and the answer is "someone already retried it" rather than a
+            // constraint name — §7's threat 3 chose the key precisely so this
+            // decision is the database's and not a read-then-write in the app.
+            throw new DuplicateRetryException(rechargeId);
+        }
+    }
+
+    /**
+     * Refund a failed recharge (#13).
+     *
+     * <p>Cash back, the customer's tab reduced, or kept on their account — log
+     * §7.4's three, of which §3.2 names the first two. Which are AVAILABLE is a
+     * fact about the original payment and not a choice: a sale that went out on
+     * credit collected no cash, so there is none to hand back.
+     */
+    @PostMapping("/recharges/{rechargeId}/refund")
+    public ResponseEntity<RefundResponse> refund(
+            @PathVariable long rechargeId,
+            @Valid @RequestBody RefundRechargeRequest request,
+            Principal principal) {
+
+        var refunded = resolution.refund(rechargeId, request.amount(), request.mode(),
+                request.customerId(), staffIdOf(principal));
+        RefundResponse body = mapper.toRefund(refunded,
+                refunded.customerId() == null ? null
+                        : customers.requireCreditable(refunded.customerId()),
+                LocalDate.now(clock));
+        return ResponseEntity
+                .created(URI.create("/recharge/recharges/" + rechargeId))
+                .body(body);
+    }
+
+    // ------------------------------------------------------------------
     // #2, #3 — the entry step
     // ------------------------------------------------------------------
 
@@ -502,6 +588,7 @@ public class RechargeController {
                 summary.totalSurcharge(),
                 summary.totalCollected(),
                 summary.cashCollectedToday(),
+                summary.cashPaidOutToday(),
                 summary.tenderMix().entrySet().stream().collect(java.util.stream.Collectors.toMap(
                         e -> e.getKey().name(), Map.Entry::getValue)),
                 summary.awaitingCount(),
@@ -552,6 +639,23 @@ public class RechargeController {
         // is the existing repository's signature and not this slice's to change.
         User user = users.findByUsername(principal.getName());
         return user == null ? null : user.getId();
+    }
+
+    /**
+     * The customer a resolution touched, for the response's credit summary.
+     *
+     * <p>Null whenever no tab moved, which is the common case: a cash refund
+     * names nobody. Read from the payment's header rather than from the request,
+     * because on a {@code CREDIT_REDUCTION} the service derives the customer
+     * from the original credit line and the request's opinion is ignored.
+     */
+    private CustomerDetails customerOf(Outstanding position, Integer paymentId) {
+        if (position == null || paymentId == null) {
+            return null;
+        }
+        return headers.findById(paymentId)
+                .map(h -> h.getCustId() == null ? null : customers.requireCreditable(h.getCustId()))
+                .orElse(null);
     }
 
     private static String blankToNull(String value) {

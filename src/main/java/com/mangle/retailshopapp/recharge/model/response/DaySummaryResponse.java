@@ -40,6 +40,14 @@ import java.util.Map;
  * the drawer not equalling takings is correct whenever a recharge has failed and
  * not been refunded, because the money is held.
  *
+ * <p>{@code cashPaidOutToday} is what went back over the counter — #13's
+ * refunds and #12's retry residuals — and it is what makes the till figures
+ * checkable rather than merely two numbers:
+ * {@code cashCollectedToday = tenderMix[CASH] - cashPaidOutToday}. It is zero on
+ * most days. It exists because a refund CANNOT appear in {@code tenderMix}:
+ * {@code ck_txnpay_amount CHECK (AMOUNT > 0)} means the tender lines record what
+ * was collected, never the net of a visit.
+ *
  * <p>There is deliberately <b>no day-close action</b> (§3.2). Requirement 8 asks
  * for a warning, never a block, which is a read — introducing a day-close
  * resource would create closed/open day state, a reopen endpoint and a rule about
@@ -52,6 +60,7 @@ public record DaySummaryResponse(
         BigDecimal totalSurcharge,
         BigDecimal totalCollected,
         BigDecimal cashCollectedToday,
+        BigDecimal cashPaidOutToday,
         Map<String, BigDecimal> tenderMix,
         long awaitingCount,
         long unresolvedFailureCount,
