@@ -11,6 +11,7 @@ import com.mangle.retailshopapp.credit.model.RcCreditReq;
 import com.mangle.retailshopapp.credit.repo.RcCreditReqRepository;
 import com.mangle.retailshopapp.recharge.domain.Outstanding;
 import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
+import com.mangle.retailshopapp.recharge.exception.InvalidTenderException;
 import com.mangle.retailshopapp.recharge.repo.CreditBookRepository;
 
 /**
@@ -120,7 +121,32 @@ public class CreditLedgerService {
     @Transactional
     public RcCreditReq receivePayment(Integer customerId, BigDecimal amount, Integer receivedBy,
                                       String note, Integer txnId, LocalDateTime when) {
+        if (customerId == null) {
+            throw new CreditRequiresCustomerException(
+                    "A payment against a tab must name the customer whose tab it is.");
+        }
+        // ⚠ REVIEW FINDING 9. This method had NONE of extendCredit's guards, and
+        // the tally being append-only is what made that serious: a null amount
+        // hit a NOT NULL column, and a NEGATIVE one appended a DPAM row that
+        // INCREASED the debt — a wrong row that cannot be corrected, only
+        // offset by another row, because nothing here ever updates or deletes.
+        //
+        // The rule was already stated in the domain: Outstanding.receive refuses
+        // both. Nothing on this path consulted it, which is the whole defect —
+        // a rule that lives somewhere nothing reads is not a rule. It is stated
+        // in two layers now, the same way §5.3 asks for the credit-customer
+        // rule: here for a sentence the counter can show, and in
+        // Outstanding.receive so no future caller can bypass it.
+        if (amount == null || amount.signum() <= 0) {
+            throw new InvalidTenderException(
+                    "A payment against a tab must be a positive amount; got " + amount + ".");
+        }
         customers.requireCreditable(customerId);
+
+        // Consulting the rule rather than restating it. The result is discarded
+        // on purpose: what is wanted is the refusal, and positionOf is the
+        // caller's to ask for when it needs the number.
+        positionOf(customerId).receive(amount);
 
         RcCreditReq row = new RcCreditReq();
         row.setCustId(customerId);

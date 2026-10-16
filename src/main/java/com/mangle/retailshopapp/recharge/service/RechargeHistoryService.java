@@ -184,12 +184,31 @@ public class RechargeHistoryService {
      * the recharge till today  =  cashCollectedToday  ==  tenderMix[CASH]
      * </pre>
      *
-     * <p>Two INDEPENDENT sources of the same number, and they must agree:
-     * {@code cashCollectedToday} is the day's net movement on
-     * {@code CASH_RECHARGE} read from the ledger, and {@code tenderMix[CASH]} is
-     * the sum of today's cash tender rows read from {@code rc_txn_payment}. If
-     * they ever differ, a posting is wrong — which makes this a real cross-check
-     * rather than a restatement.
+     * <p>Two INDEPENDENT sources of the same money, and the relation between
+     * them is assertable:
+     *
+     * <pre>
+     *   cashCollectedToday = tenderMix[CASH] - cashPaidOutToday
+     * </pre>
+     *
+     * <p>{@code cashCollectedToday} is the day's NET movement on
+     * {@code CASH_RECHARGE} read from the ledger; {@code tenderMix[CASH]} is the
+     * sum of today's cash tender rows read from {@code rc_txn_payment}; and
+     * {@code cashPaidOutToday} is the credit side of {@code CASH_RECHARGE}
+     * alone. If the three ever stop satisfying that identity, a posting is wrong.
+     *
+     * <p><b>⚠ THE THIRD TERM IS NOT DECORATION, and leaving it out was a real
+     * defect for the one day a refund happened.</b> This javadoc previously said
+     * the first two "must agree" and that any difference meant a posting was
+     * wrong. That held only while money moved in one direction. #12's residual
+     * and #13's refund both pay cash OUT, and
+     * {@code ck_txnpay_amount CHECK (AMOUNT > 0)} makes a negative tender line
+     * unrepresentable — V12's way of saying the tender lines record what was
+     * COLLECTED, not the net of a visit. So after one refund the two figures
+     * differ by exactly the refund, legitimately, and a reader following the old
+     * sentence would have gone looking for a posting bug that was not there.
+     * Found by driving a retry and a refund through a running server, which is
+     * the only way any of this slice's identity errors have ever been found.
      *
      * <p><b>This replaces two earlier formulations, both of which were wrong,
      * and the second wrongly "fixed" the first.</b>
@@ -276,8 +295,12 @@ public class RechargeHistoryService {
                 // Still useful - it is the day's recognised income - but it is not
                 // the till figure, because it excludes everything still held.
                 totalTakings.add(totalSurcharge),
-                // The till figure, from the ledger.
+                // The till figure, from the ledger: debits less credits, so a
+                // refund has already reduced it.
                 scale2(balances.movementOn(CASH_RECHARGE, day)),
+                // What went back over the counter today — refunds (#13) and
+                // retry residuals (#12). Zero on most days.
+                scale2(balances.paidOutOn(CASH_RECHARGE, day)),
                 tenderMix,
                 awaiting,
                 failed,
@@ -329,6 +352,7 @@ public class RechargeHistoryService {
                              BigDecimal totalTakings, BigDecimal totalSurcharge,
                              BigDecimal totalCollected,
                              BigDecimal cashCollectedToday,
+                             BigDecimal cashPaidOutToday,
                              Map<SettlementMethod, BigDecimal> tenderMix,
                              long awaitingCount, long unresolvedFailureCount,
                              BigDecimal heldPending) {

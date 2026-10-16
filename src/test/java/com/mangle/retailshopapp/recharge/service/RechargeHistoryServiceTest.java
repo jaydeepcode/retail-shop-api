@@ -194,10 +194,20 @@ class RechargeHistoryServiceTest {
         @DisplayName("⚠ the till reconciles from the LEDGER and the tender rows independently")
         void tillReconcilesFromTwoSources() {
             // The replacement for two wrong identities. cashCollectedToday is the
-            // day's CASH_RECHARGE movement read from the ledger; tenderMix[CASH]
-            // is today's cash tender rows read from rc_txn_payment. Two
-            // independent readings that must agree — so a disagreement means a
-            // posting is wrong, which is a real check rather than a restatement.
+            // day's NET CASH_RECHARGE movement read from the ledger;
+            // tenderMix[CASH] is today's cash tender rows read from
+            // rc_txn_payment; cashPaidOutToday is the credit side alone. Three
+            // readings, two of them independent, and the identity between them
+            // is what makes this a real check rather than a restatement:
+            //
+            //     cashCollectedToday = tenderMix[CASH] - cashPaidOutToday
+            //
+            // ⚠ THE THIRD TERM IS WHY THIS ASSERTS THE IDENTITY RATHER THAN
+            // EQUALITY. Nothing is refunded on this fixture, so the two-term
+            // form would pass here and break the first time #13 is used — money
+            // going out cannot be a tender row at all (ck_txnpay_amount CHECK
+            // (AMOUNT > 0)). The day with a refund on it is asserted in
+            // RechargeFailureResolutionServiceTest, where one can be made.
             var completed = settle(ServiceType.TV, "DISHTV", "240.00", "key-till-1");
             fulfilment.markCompleted(completed.recharges().get(0).getRechargeId(),
                     null, null, staffUserId);
@@ -205,9 +215,12 @@ class RechargeHistoryServiceTest {
 
             var summary = history.daySummary(LocalDate.now());
 
-            assertEquals(summary.tenderMix().get(SettlementMethod.CASH),
+            assertEquals(summary.tenderMix().get(SettlementMethod.CASH)
+                            .subtract(summary.cashPaidOutToday()),
                     summary.cashCollectedToday(),
                     "the ledger and the tender rows must report the same cash");
+            assertEquals(new BigDecimal("0.00"), summary.cashPaidOutToday(),
+                    "nothing went back over the counter on this fixture");
             assertTrue(summary.cashCollectedToday().signum() > 0);
         }
 

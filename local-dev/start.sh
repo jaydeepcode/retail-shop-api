@@ -42,7 +42,7 @@ done
 echo ' ready'
 
 # ---------------------------------------------------------------- backend
-say "2/4  Backend (Flyway applies V9-V12 and V20-V28, capped at 28)"
+say "2/4  Backend (Flyway applies V9-V12 and V20-V29, capped at 29)"
 cd "$BACKEND"
 SPRING_PROFILES_ACTIVE=container \
 DB_PASSWORD=s3pass \

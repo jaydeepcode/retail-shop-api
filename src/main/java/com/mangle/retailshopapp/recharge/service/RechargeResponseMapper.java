@@ -15,6 +15,7 @@ import com.mangle.retailshopapp.credit.model.RcTxnHeader;
 import com.mangle.retailshopapp.customer.model.CustomerDetails;
 import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
 import com.mangle.retailshopapp.recharge.domain.FinancialYear;
+import com.mangle.retailshopapp.recharge.domain.Outstanding;
 import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.model.RcOperator;
@@ -22,6 +23,8 @@ import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RcTxnPayment;
 import com.mangle.retailshopapp.recharge.model.RefRechargeRoute;
 import com.mangle.retailshopapp.recharge.model.response.CreditSummaryResponse;
+import com.mangle.retailshopapp.recharge.model.response.RefundResponse;
+import com.mangle.retailshopapp.recharge.model.response.RetryRechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeWorkItemResponse;
 import com.mangle.retailshopapp.recharge.model.response.SettlementLineResponse;
@@ -207,6 +210,58 @@ public class RechargeResponseMapper {
                 toRecharges(visit.recharges()),
                 lines,
                 creditSummary);
+    }
+
+    /**
+     * The retry response (#12).
+     *
+     * <p>Both recharges are mapped, so the counter can drop the original off the
+     * failures list and put the new one on the worklist from one payload.
+     */
+    @Transactional(readOnly = true)
+    public RetryRechargeResponse toRetry(RechargeFailureResolutionService.Retried retried,
+                                         CustomerDetails customer, LocalDate today) {
+        return new RetryRechargeResponse(
+                toRecharge(retried.retry()),
+                toRecharge(retried.original()),
+                retried.plan().differenceOwed(),
+                retried.differenceSettledAs(),
+                retried.plan().topUpDue(),
+                retried.topUpTakenAs(),
+                creditSummary(customer, retried.creditPosition(), today));
+    }
+
+    /** The refund response (#13). */
+    @Transactional(readOnly = true)
+    public RefundResponse toRefund(RechargeFailureResolutionService.Refunded refunded,
+                                   CustomerDetails customer, LocalDate today) {
+        return new RefundResponse(
+                toRecharge(refunded.original()),
+                refunded.amount(),
+                refunded.mode(),
+                creditSummary(customer, refunded.creditPosition(), today));
+    }
+
+    /**
+     * The tab after the resolution, or null when no tab was touched.
+     *
+     * <p>Null is the ordinary answer: a cash refund names no customer at all,
+     * which is the point of defaulting to handing the cash back (log §7.4).
+     * {@code amountExtended} is null here rather than zero — nothing was
+     * extended, and a zero would read as "credit of ₹0 was given".
+     */
+    private CreditSummaryResponse creditSummary(CustomerDetails customer, Outstanding position,
+                                                LocalDate today) {
+        if (position == null) {
+            return null;
+        }
+        return CreditSummaryResponse.from(
+                customer == null ? null : customer.getCustId(),
+                customer == null ? null : customer.getCustomerName(),
+                null,
+                position,
+                today,
+                config.creditWarningDays());
     }
 
     /**

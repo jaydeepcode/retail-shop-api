@@ -221,6 +221,41 @@ the way V28 does or it will fail on a database that already has V28.
   unverified constraint on the book of record is exactly the shape of failure that stops a
   migration halfway.
 
+## V29 makes one-retry-per-failure a database guarantee
+
+`design-api.md` §7's threat table, row 3, specifies **a unique key on
+`FAILED_RECHARGE_ID`** and §7.2 then leans on it — #12 needs no `Idempotency-Key` header
+*because* "it is guarded by the unique retry key". V12 created the column with a plain
+`KEY idx_rech_retry`, so neither guarantee existed. V29 adds `uq_rech_retry` and drops the
+redundant plain index, in that order: `fk_rech_retry` needs an index on the column at all
+times, so dropping first would fail errno 150.
+
+This is the **eighth** prerequisite a document decided and no migration built, found the
+same way as `implementation-plan.md` §0.6's seven — by building against the schema rather
+than against the documents.
+
+**It pushes the opening balances once more, to V30/V31.** They have now moved from V27/V28
+to V28/V29 to V29/V30 to V30/V31. That is still free for the reason stated above: they are
+S6 go-live work and apply after everything here regardless.
+
+### ⚠ What V13 must now do, and could not be written here
+
+`RcTxnPaymentRepository.tenderMixOn` — the day summary's tender mix — is dated by
+`rc_txn_payment.CRE_DTTM` rather than by the header's `TXN_DTTM`. It had to change: a retry
+at a higher amount appends a tender line to the **original** payment (log §7.4), so a
+top-up collected today can hang off a header dated yesterday, and header-dating would add
+it to yesterday's tender mix while its cash posting landed today — breaking the
+independent-sources cross-check §7.1(c) builds the day summary around, on both days.
+
+`design-domain.md` §6's **V13 spec inserts historical `CRDT`, `UPI` and `CASH` lines into
+`rc_txn_payment` without naming `CRE_DTTM`**, which would take V12's
+`DEFAULT CURRENT_TIMESTAMP` — the migration's own run date. Harmless under the old query;
+under this one it would file all 2,850 migrated baskets into the tender mix of cutover day.
+
+**V13 must set `CRE_DTTM = h.TXN_DTTM` on every row it inserts.** It is reserved cutover
+work, so it cannot be written or corrected from here — only recorded, the same way V8's
+outstanding `repair` is.
+
 ## ⚠ One deployment step the ledger needs, and it is not in a migration
 
 V23 and V24 create triggers, and MySQL 8.0.43 ships with `log_bin = ON` and
