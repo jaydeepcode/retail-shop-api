@@ -272,6 +272,85 @@ class RechargeSettlementServiceTest {
     }
 
     // ------------------------------------------------------------------
+    // DISHTV_NO — the optional real relation
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a TV line on a known connection number records DISHTV_NO")
+    void tvLineLinksKnownConnection() {
+        // Review finding 10. Without this the column is null forever and
+        // /recharge/number-hints returns an empty dishtvNo for every TV number
+        // ever recharged — a shipped endpoint with a permanently empty field.
+        insertConnection("02700000001", "DISHTV", "Known Subscriber");
+
+        var settled = settlement.settle(
+                List.of(tv("DISHTV", "240.00", null)),
+                List.of(cash("250.00", "250.00")),
+                staffUserId, "key-dishtv-known");
+
+        RcRecharge recharge = settled.recharges().get(0);
+        assertEquals("02700000001", recharge.getDishtvNo(),
+                "the typed number IS a known connection, so the FK is exercised");
+        assertEquals("02700000001", recharge.getTargetNumber(),
+                "and the box number stays where it always was");
+        assertEquals(1, count("SELECT COUNT(*) FROM rc_recharge r "
+                + "JOIN rc_dishtv_dtls d ON d.DISHTV_NO = r.DISHTV_NO "
+                + "WHERE r.RECHARGE_ID = " + recharge.getRechargeId()),
+                "fk_rech_dishtv joins, read back from the database");
+    }
+
+    @Test
+    @DisplayName("a TV line on an unknown connection number leaves DISHTV_NO null")
+    void tvLineOnUnknownNumberIsNotLinked() {
+        // 1,279 of 1,583 distinct recharged TV numbers match no row (§R3), so
+        // this is the COMMON case, not the edge: nothing is fabricated and the
+        // recharge still settles. Nothing is seeded here on purpose.
+        var settled = settlement.settle(
+                List.of(tv("DISHTV", "240.00", null)),
+                List.of(cash("250.00", "250.00")),
+                staffUserId, "key-dishtv-unknown");
+
+        assertNull(settled.recharges().get(0).getDishtvNo(),
+                "an unknown box number is ordinary, and fk_rech_dishtv would "
+                        + "reject a fabricated one anyway");
+        assertEquals("02700000001", settled.recharges().get(0).getTargetNumber());
+    }
+
+    @Test
+    @DisplayName("a MOBILE line never takes a DISHTV_NO, even on a colliding number")
+    void mobileLineIsNeverLinked() {
+        // The case between the two tests above: a mobile number that IS a row in
+        // rc_dishtv_dtls. ck_rech_tv would reject the write, so an unguarded
+        // lookup would turn an ordinary mobile recharge into a 500.
+        insertConnection("9000000002", "DISHTV", "Collides With A Mobile");
+
+        var settled = settlement.settle(
+                List.of(mobile("RJIO", "299.00", null)),
+                List.of(cash("299.00", "300.00")),
+                staffUserId, "key-dishtv-mobile");
+
+        assertNull(settled.recharges().get(0).getDishtvNo(),
+                "ck_rech_tv: DISHTV_NO belongs to TV lines alone");
+    }
+
+    @Test
+    @DisplayName("a known connection typed with surrounding spaces still links")
+    void typedNumberIsTrimmedForTheMatch() {
+        // V15 backfills history on TRIM(reference_no), so a live settle that
+        // matched on the raw string would link fewer rows than the backfill did
+        // for the same box.
+        insertConnection("02700000009", "DISHTV", "Spaced Entry");
+
+        var settled = settlement.settle(
+                List.of(new RequestedRecharge(ServiceType.TV, " 02700000009 ", "DISHTV",
+                        new BigDecimal("300.00"), new BigDecimal("0.00"))),
+                List.of(cash("300.00", "300.00")),
+                staffUserId, "key-dishtv-spaces");
+
+        assertEquals("02700000009", settled.recharges().get(0).getDishtvNo());
+    }
+
+    // ------------------------------------------------------------------
     // Completion — stage two
     // ------------------------------------------------------------------
 
@@ -681,6 +760,15 @@ class RechargeSettlementServiceTest {
                 .executeUpdate();
         em.flush();
         return lastInsertId();
+    }
+
+    /** One of the 458 known TV connections. None are seeded by the baseline. */
+    private void insertConnection(String dishtvNo, String type, String name) {
+        em.createNativeQuery("INSERT INTO rc_dishtv_dtls (DISHTV_NO, DISHTV_TYP, NAME) "
+                        + "VALUES (:n, :t, :name)")
+                .setParameter("n", dishtvNo).setParameter("t", type).setParameter("name", name)
+                .executeUpdate();
+        em.flush();
     }
 
     private int insertCustomer(String first, String last, String contact) {

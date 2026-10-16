@@ -23,6 +23,7 @@ import com.mangle.retailshopapp.recharge.model.RcIdempotency;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RcTxnPayment;
 import com.mangle.retailshopapp.recharge.model.RcTxnPaymentId;
+import com.mangle.retailshopapp.recharge.repo.RcDishtvDtlsRepository;
 import com.mangle.retailshopapp.recharge.repo.RcIdempotencyRepository;
 import com.mangle.retailshopapp.recharge.repo.RcRechargeRepository;
 import com.mangle.retailshopapp.recharge.repo.RcTxnPaymentRepository;
@@ -75,6 +76,7 @@ public class RechargeSettlementService {
     private final RcRechargeRepository recharges;
     private final RcTxnPaymentRepository payments;
     private final RcIdempotencyRepository idempotency;
+    private final RcDishtvDtlsRepository connections;
     private final OperatorConfigService config;
     private final CustomerDirectoryService customers;
     private final CreditLedgerService credit;
@@ -86,6 +88,7 @@ public class RechargeSettlementService {
                                      RcRechargeRepository recharges,
                                      RcTxnPaymentRepository payments,
                                      RcIdempotencyRepository idempotency,
+                                     RcDishtvDtlsRepository connections,
                                      OperatorConfigService config,
                                      CustomerDirectoryService customers,
                                      CreditLedgerService credit,
@@ -96,6 +99,7 @@ public class RechargeSettlementService {
         this.recharges = recharges;
         this.payments = payments;
         this.idempotency = idempotency;
+        this.connections = connections;
         this.config = config;
         this.customers = customers;
         this.credit = credit;
@@ -206,6 +210,7 @@ public class RechargeSettlementService {
             recharge.setOperatorCode(line.operatorCode());
             recharge.setRouteCode(line.routeCode());
             recharge.setTargetNumber(line.number());
+            recharge.setDishtvNo(knownConnection(line));
             recharge.setAmount(line.amount());
             recharge.setSurcharge(line.surcharge());
             recharge.setRechargeDttm(now);
@@ -256,6 +261,30 @@ public class RechargeSettlementService {
         ledger.postSettlement(paymentId, plan, staffUserId, now);
 
         return new Settled(paymentId, plan, created, position, now);
+    }
+
+    /**
+     * The known TV connection this number IS, or null (§4.6).
+     *
+     * <p>⚠ ADVISORY, NEVER A REJECTION. design-domain.md §4.6: "staff still pick
+     * a CONNECTION; the customer link is advisory." 1,279 of 1,583 distinct
+     * recharged TV numbers match no row in the 458-row table (§R3), so a miss is
+     * the ordinary case and leaves the column NULL — the box number is in
+     * {@code TARGET_NUMBER} either way, and §R3 and V18 are both explicit that
+     * connection rows are not to be fabricated for the unknown ones.
+     *
+     * <p>The match is the same rule V15's backfill applies to history: the
+     * TRIMMED typed number must exist in {@code rc_dishtv_dtls}. A mobile line
+     * never gets one whatever its digits are, which is what
+     * {@code ck_rech_tv CHECK (DISHTV_NO IS NULL OR RECHARGE_KIND = 'TV')}
+     * enforces in the database.
+     */
+    private String knownConnection(SettlementPlan.RechargeLine line) {
+        if (line.serviceType() != ServiceType.TV) {
+            return null;
+        }
+        String number = line.number().trim();
+        return connections.existsById(number) ? number : null;
     }
 
     /**
