@@ -23,6 +23,17 @@ Nothing it creates survives `stop.sh`. That is deliberate — see below.
 
 ---
 
+## Running the owner's gate
+
+This script is for a developer trying the counter. **The owner's gate is a different thing**
+— real recharges, on a real day, against production, with the legacy app still running — and
+it has its own procedure:
+
+| | |
+|---|---|
+| [`OWNER-GATE.md`](OWNER-GATE.md) | the procedure: what to prepare, what to record, the drawer equation, and the four things that look like failures and are not |
+| [`gate-preflight.sh`](gate-preflight.sh) | read-only checks that a database is ready. Safe against production. Run it before the day, not on it |
+
 ## Why there is a script at all, rather than just `mvn spring-boot:run`
 
 ⚠ **Do not start the application on the `local` profile to try things out.**
@@ -69,7 +80,7 @@ docker run -d --name s3-counter-db \
   -v "$PWD/local-dev/01-pre-flyway-remainder.sql:/docker-entrypoint-initdb.d/02-remainder.sql:ro" \
   mysql:8.0.43 --log-bin-trust-function-creators=1
 
-# 2. the backend. Flyway runs V9-V12 and V20-V28 on first boot.
+# 2. the backend. Flyway runs V9-V12 and V20-V29 on first boot.
 SPRING_PROFILES_ACTIVE=container \
 DB_PASSWORD=s3pass \
 JWT_SECRET=container-only-secret-not-for-any-real-deployment-0123456789 \
