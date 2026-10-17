@@ -3,7 +3,9 @@ package com.mangle.retailshopapp.recharge.service;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,6 +13,7 @@ import com.mangle.retailshopapp.credit.model.RcCreditReq;
 import com.mangle.retailshopapp.credit.repo.RcCreditReqRepository;
 import com.mangle.retailshopapp.recharge.domain.Outstanding;
 import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
+import com.mangle.retailshopapp.recharge.exception.CustomerNotFound;
 import com.mangle.retailshopapp.recharge.exception.InvalidTenderException;
 import com.mangle.retailshopapp.recharge.repo.CreditBookRepository;
 
@@ -175,6 +178,115 @@ public class CreditLedgerService {
         BigDecimal tally = row[0] == null ? BigDecimal.ZERO : (BigDecimal) row[0];
         LocalDateTime oldestOpen = row[1] == null ? null : ((java.sql.Timestamp) row[1]).toLocalDateTime();
         return Outstanding.fromTally(tally.setScale(2), oldestOpen);
+    }
+
+    /**
+     * The credit book, oldest debt first (§3.2 endpoint #14).
+     *
+     * <p>⚠ CROSS-BUSINESS AND NEVER YEAR-FILTERED, and both are load-bearing.
+     * log §14.8: someone owing ₹2,000 on water and ₹49 on recharge shows
+     * ₹2,049, because a figure scoped to recharge would make the {@code warn}
+     * flag — the entire reason this panel exists — understate the exposure while
+     * looking authoritative. And §9.3 names what a year filter would cost: 33 of
+     * 34 open balances vanish and staff stop chasing debt. The repository takes
+     * no date parameter at all, which is the structural form of that rule.
+     *
+     * <p>The three bank pseudo-customers are excluded (§2.6): customer 269 alone
+     * carries −₹46,766, which is a UPI clearing balance rather than a debt, and
+     * listing a bank as the shop's largest debtor is how that figure would be
+     * read.
+     *
+     * @param minOutstanding null for everyone with a tab; a positive amount
+     *                       filters. Zero is NOT the same as null — see the
+     *                       repository
+     */
+    @Transactional(readOnly = true)
+    public List<CreditBookRow> creditBook(BigDecimal minOutstanding, Pageable pageable) {
+        List<Integer> excluded = settings.ledgerCustomerIds();
+        return creditBook.creditBook(excluded, minOutstanding, pageable).stream()
+                .map(CreditLedgerService::toRow)
+                .toList();
+    }
+
+    /** How many customers the credit book holds, for the pager. */
+    @Transactional(readOnly = true)
+    public long creditBookSize(BigDecimal minOutstanding) {
+        return creditBook.countCreditBook(settings.ledgerCustomerIds(), minOutstanding);
+    }
+
+    /**
+     * One person's tab, newest first, from every business (§3.2 endpoint #15).
+     *
+     * <p>The running balance is computed OLDEST-first and the rows returned
+     * NEWEST-first, which is why the ordering appears twice in the query:
+     * reversing a running total is not the same as computing it backwards.
+     *
+     * @throws CustomerNotFound 404 for an unknown customer or a ledger account —
+     *         a ledger account has no tab to show, and showing one would present
+     *         a clearing balance as somebody's debt
+     */
+    @Transactional(readOnly = true)
+    public List<StatementLine> statement(int customerId, Pageable pageable) {
+        customers.requireCreditable(customerId);
+        return creditBook.statementOf(customerId, pageable).stream()
+                .map(CreditLedgerService::toLine)
+                .toList();
+    }
+
+    /** How many lines that statement has. */
+    @Transactional(readOnly = true)
+    public long statementSize(int customerId) {
+        return creditBook.countStatement(customerId);
+    }
+
+    private static CreditBookRow toRow(Object[] r) {
+        BigDecimal tally = r[4] == null ? BigDecimal.ZERO : (BigDecimal) r[4];
+        return new CreditBookRow(
+                ((Number) r[0]).intValue(),
+                fullName((String) r[1], (String) r[2]),
+                (String) r[3],
+                // Outstanding is the only place the sign convention is read.
+                Outstanding.fromTally(tally.setScale(2), timestamp(r[6])),
+                timestamp(r[5]));
+    }
+
+    private static StatementLine toLine(Object[] r) {
+        return new StatementLine(
+                ((Number) r[0]).intValue(),
+                timestamp(r[1]),
+                (String) r[2],
+                ((BigDecimal) r[3]).setScale(2),
+                ((BigDecimal) r[4]).setScale(2),
+                (String) r[5],
+                (String) r[6],
+                r[7] == null ? null : ((Number) r[7]).intValue());
+    }
+
+    private static LocalDateTime timestamp(Object value) {
+        return value == null ? null : ((java.sql.Timestamp) value).toLocalDateTime();
+    }
+
+    /**
+     * The two name columns joined, tolerating either being null.
+     *
+     * <p>{@code rs_cust_dtls} has rows with no last name, and "Asha null" on a
+     * debtor list is the kind of thing that gets a screen distrusted.
+     */
+    private static String fullName(String first, String last) {
+        String joined = ((first == null ? "" : first.trim()) + " "
+                + (last == null ? "" : last.trim())).trim();
+        return joined.isEmpty() ? null : joined;
+    }
+
+    /** One row of the credit book (#14). */
+    public record CreditBookRow(int customerId, String name, String contactNumber,
+                                Outstanding position, LocalDateTime lastActivityAt) {
+    }
+
+    /** One line of a statement (#15), from whichever business wrote it. */
+    public record StatementLine(int creditRequestId, LocalDateTime at, String type,
+                                BigDecimal amount, BigDecimal runningBalance, String note,
+                                String extendedBy, Integer paymentId) {
     }
 
     /** The 30-day flag, computed server-side so two clients cannot disagree (§3.3). */

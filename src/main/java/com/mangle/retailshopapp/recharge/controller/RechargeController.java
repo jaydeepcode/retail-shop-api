@@ -1,5 +1,6 @@
 package com.mangle.retailshopapp.recharge.controller;
 
+import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -42,7 +43,9 @@ import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse.OperatorConfig;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse.RouteConfig;
 import com.mangle.retailshopapp.recharge.model.response.CreateCustomerRequestResult;
+import com.mangle.retailshopapp.recharge.model.response.CreditBookRowResponse;
 import com.mangle.retailshopapp.recharge.model.response.CreditCustomerResponse;
+import com.mangle.retailshopapp.recharge.model.response.CreditStatementResponse;
 import com.mangle.retailshopapp.recharge.model.response.DaySummaryResponse;
 import com.mangle.retailshopapp.recharge.model.response.HistoryPageResponse;
 import com.mangle.retailshopapp.recharge.model.response.NumberHintResponse;
@@ -76,6 +79,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
 import java.security.Principal;
@@ -105,10 +109,17 @@ import java.security.Principal;
  * straight from a controller with no service and no transaction. Nothing here
  * writes.
  *
- * <p><b>This slice ships 17 of §3.2's 19 endpoints.</b> Everything the counter,
- * the worklist, history, the end-of-day read and resolving a failure. The two
- * left are the credit book's list and statement (#14-#15) and its settlement
- * endpoint (#16), listed in the PR rather than left to be discovered.
+ * <p><b>This slice ships 18 of §3.2's 19 endpoints.</b> Everything the counter,
+ * the worklist, history, the end-of-day read, resolving a failure and the credit
+ * book's two reads. The one left is #16, taking a payment against a tab, and it
+ * is deferred deliberately rather than forgotten: design-ledger.md §6.3 makes
+ * the LEDGER the authority for receivables from go-live and retires
+ * {@code rc_credit_req} to a derived subledger, so a receipt should clear a
+ * customer's {@code AR_*} legs oldest-first — each of which names its own
+ * business. That allocation cannot be written yet, because
+ * implementation-plan.md §1.2 states the ledger "is not authoritative for
+ * recharge until the legacy writer is retired", and today it holds no legacy
+ * debt at all. #16 belongs in S6, beside the opening balances that put it there.
  */
 @RestController
 @RequestMapping("/recharge")
@@ -369,6 +380,71 @@ public class RechargeController {
                                          Principal principal) {
         return mapper.toRecharge(
                 fulfilment.voidRecharge(rechargeId, request.reason(), staffIdOf(principal)));
+    }
+
+    // ------------------------------------------------------------------
+    // #14, #15 — the credit book (requirements 6, 9)
+    // ------------------------------------------------------------------
+
+    /**
+     * Who owes the shop money, oldest debt first (#14).
+     *
+     * <p>⚠ ACROSS EVERY BUSINESS, and never year-filtered. log §14.8: scoped to
+     * recharge, someone owing ₹2,000 on water and ₹49 on recharge would show as
+     * ₹49, so the {@code warn} flag — the entire reason this panel exists —
+     * would understate the exposure while looking authoritative. §9.3 names what
+     * a year filter costs: 33 of 34 open balances vanish and staff stop chasing
+     * debt.
+     *
+     * <p>{@code minOutstanding} is ABSENT by default rather than zero, and the
+     * two differ: absent keeps the two customers who are in credit, zero would
+     * drop them.
+     */
+    @GetMapping("/credit/customers")
+    public PageResponse<CreditBookRowResponse> creditBook(
+            @RequestParam(required = false) @PositiveOrZero BigDecimal minOutstanding,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+
+        LocalDate today = LocalDate.now(clock);
+        int warnDays = config.creditWarningDays();
+
+        List<CreditBookRowResponse> rows = credit.creditBook(minOutstanding,
+                        PageRequest.of(page, size)).stream()
+                .map(r -> CreditBookRowResponse.from(r, today, warnDays))
+                .toList();
+
+        return PageResponse.of(rows, page, size, credit.creditBookSize(minOutstanding));
+    }
+
+    /**
+     * One person's tab, newest first, from every business (#15).
+     *
+     * <p>The header figures come from the SAME {@code positionOf} the basket
+     * screen uses, so the outstanding a staff member sees here cannot disagree
+     * with the one they saw when taking the sale. Two formulas for one number is
+     * how they come to differ.
+     */
+    @GetMapping("/credit/customers/{customerId}")
+    public CreditStatementResponse creditStatement(
+            @PathVariable int customerId,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size) {
+
+        // Resolved first: an unknown customer or a ledger account is a 404 here
+        // rather than an empty statement, because an empty statement reads as
+        // "owes nothing" and a bank pseudo-customer's clearing balance is not a
+        // tab at all (§2.6).
+        CustomerDetails customer = customers.requireCreditable(customerId);
+
+        var lines = credit.statement(customerId, PageRequest.of(page, size));
+        PageResponse<CreditStatementResponse.StatementLineResponse> body = PageResponse.of(
+                CreditStatementResponse.linesOf(lines), page, size,
+                credit.statementSize(customerId));
+
+        return CreditStatementResponse.from(customerId, customer.getCustomerName(),
+                customer.getContactNum(), credit.positionOf(customerId),
+                LocalDate.now(clock), config.creditWarningDays(), body);
     }
 
     // ------------------------------------------------------------------
