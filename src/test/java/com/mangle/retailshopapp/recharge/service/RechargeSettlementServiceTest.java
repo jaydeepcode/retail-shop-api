@@ -541,20 +541,28 @@ class RechargeSettlementServiceTest {
     }
 
     @Test
-    @DisplayName("voiding a completed sale reverses it too, and twice reverses once")
-    void voidReverses() {
+    @DisplayName("withdrawing a completed sale reverses it, and twice reverses once")
+    void withdrawingACompletedSaleReversesOnce() {
+        // ⚠ THIS USED TO DRIVE voidRecharge, removed on 2026-10-21. What it
+        // asserts is about reverseCompletion's IDEMPOTENCY KEY and not about the
+        // void path, and that key is unchanged — so the case is rewritten against
+        // COMPLETED -> FAILED, which is now the only exit from COMPLETED and
+        // posts the identical reversal. Marking failed a second time is the
+        // §5.3 no-op, and it must not write a second reversing journal.
         var settled = settlement.settle(
                 List.of(mobile("ARTL", "199.00", null)),
                 List.of(cash("199.00", "199.00")),
                 staffUserId, "key-revvoid-1");
         long rechargeId = settled.recharges().get(0).getRechargeId();
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
-        fulfilment.voidRecharge(rechargeId, "entered twice", staffUserId);
+        fulfilment.markFailed(rechargeId, "entered twice", staffUserId);
+        fulfilment.markFailed(rechargeId, "entered twice", staffUserId);
 
         assertEquals("199.00", netOf("RCHG_PENDING", "CR_MINUS_DR"));
         assertEquals("0.00", netOf("INC_RCHG_COMM", "CR_MINUS_DR"));
         assertEquals(1L, count("SELECT COUNT(*) FROM acc_voucher WHERE IDEMPOTENCY_KEY = '"
-                + RechargeLedgerPostings.reversalKey(rechargeId) + "'"));
+                + RechargeLedgerPostings.reversalKey(rechargeId) + "'"),
+                "one reversal, however many times the status is re-asserted");
     }
 
     @Test
@@ -703,21 +711,43 @@ class RechargeSettlementServiceTest {
         long rechargeId = settled.recharges().get(0).getRechargeId();
 
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
-        fulfilment.voidRecharge(rechargeId, "entered twice", staffUserId);
+        fulfilment.markFailed(rechargeId, "entered twice", staffUserId);
+        long vouchersBefore = count("SELECT COUNT(*) FROM acc_voucher");
 
-        // VOIDED is terminal — nothing follows it.
+        // ⚠ THIS USED TO REACH A TERMINAL STATUS BY VOIDING, and voidRecharge was
+        // removed on 2026-10-21. It asserts the 409 rather than anything about
+        // voids, so it now uses an edge that is still illegal and still reachable
+        // from this service alone: ALLOWED[FAILED] is {RETRIED, REFUNDED}, so
+        // re-completing a failure is refused. Nothing un-fails a recharge.
         var ex = assertThrows(
                 com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionException.class,
-                () -> fulfilment.markFailed(rechargeId, "late", staffUserId));
+                () -> fulfilment.markCompleted(rechargeId, "VND-9", null, staffUserId));
         assertEquals(409, ex.status());
+        assertEquals(vouchersBefore, count("SELECT COUNT(*) FROM acc_voucher"),
+                "and it wrote nothing — the check runs before any posting");
     }
 
     @Test
-    @DisplayName("voiding needs a reason")
-    void voidNeedsReason() {
-        // log §7.1: the mandatory reason plus float reconciliation is the ONLY
-        // control against using a void to refund a delivered recharge. There is
-        // no second approver, because FRD §3 fixes v1 as single-user.
+    @DisplayName("⚠ withdrawing a completed sale takes an OPTIONAL reason, and blank is not one")
+    void withdrawalReasonIsOptional() {
+        // ⚠ THIS REPLACES voidNeedsReason, and the replacement is the decision.
+        // log §7.1 attached a MANDATORY reason to VOIDED alone and called it "the
+        // only control against using a void to refund a delivered recharge",
+        // there being no second approver under FRD §3's single-user v1. That rule
+        // went with the void path on 2026-10-21: COMPLETED -> FAILED is what
+        // records a sale that should never have been entered, and design-api.md
+        // §3.2's MarkFailedRequest(reason?) specifies an OPTIONAL reason.
+        //
+        // What is lost is the LABEL, not the correction. For a single-user shop
+        // whose control is the audit trail (FRD §3:65-70), the status history row
+        // below is that trail — written on every transition whether a reason was
+        // given or not.
+        //
+        // ⚠ V12__Recharge_tables.sql:144-145 claims both COMPLETED -> VOIDED and
+        // COMPLETED -> FAILED require one. Both halves are now wrong, and it is
+        // deliberately NOT corrected in place: V12 is applied, and editing even a
+        // comment changes its Flyway checksum. RechargeStatus's class javadoc is
+        // where that is recorded.
         var settled = settlement.settle(
                 List.of(mobile("ARTL", "199.00", null)),
                 List.of(cash("199.00", "199.00")),
@@ -725,8 +755,17 @@ class RechargeSettlementServiceTest {
         long rechargeId = settled.recharges().get(0).getRechargeId();
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
 
-        assertThrows(com.mangle.retailshopapp.recharge.exception.ReasonRequiredException.class,
-                () -> fulfilment.voidRecharge(rechargeId, "   ", staffUserId));
+        fulfilment.markFailed(rechargeId, "   ", staffUserId);
+
+        assertEquals("FAILED", scalar("SELECT STATUS_CODE FROM rc_recharge "
+                + "WHERE RECHARGE_ID = " + rechargeId),
+                "a blank reason does not refuse the transition any more");
+        assertEquals(0L, count("SELECT COUNT(*) FROM rc_recharge "
+                + "WHERE RECHARGE_ID = " + rechargeId + " AND FAILURE_REASON IS NOT NULL"),
+                "and a blank one is not stored as though it were an explanation");
+        assertEquals(1L, count("SELECT COUNT(*) FROM rc_recharge_status_hist "
+                + "WHERE RECHARGE_ID = " + rechargeId + " AND TO_STATUS = 'FAILED'"),
+                "the audit trail is written either way — that is the control now");
     }
 
     // ------------------------------------------------------------------

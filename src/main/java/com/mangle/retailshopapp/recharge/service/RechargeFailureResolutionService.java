@@ -27,6 +27,7 @@ import com.mangle.retailshopapp.recharge.exception.PaymentNotFound;
 import com.mangle.retailshopapp.recharge.exception.RechargeNotFound;
 import com.mangle.retailshopapp.recharge.exception.RefundModeNotAvailableException;
 import com.mangle.retailshopapp.recharge.exception.UnsettledDifferenceException;
+import com.mangle.retailshopapp.recharge.exception.UpiRequiresReferenceException;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RcTxnPayment;
 import com.mangle.retailshopapp.recharge.model.RcTxnPaymentId;
@@ -222,10 +223,16 @@ public class RechargeFailureResolutionService {
      * @param amount what the client believes it is refunding. Checked against
      *               the line total rather than trusted — a client that disagrees
      *               about the figure is refused, not quietly overruled
+     * @param note free text, and the UPI transaction reference when
+     *             {@code mode = UPI}, where {@link ResidualMode#needsReference()}
+     *             makes it mandatory. ⚠ It was accepted by
+     *             {@code RefundRechargeRequest} and DROPPED here until
+     *             2026-10-21 — {@code new Settlement(mode, customerId, null)} —
+     *             which went unnoticed because no mode did anything with it
      */
     @Transactional
     public Refunded refund(long failedRechargeId, BigDecimal amount, ResidualMode mode,
-                           Integer customerId, Integer staffUserId) {
+                           Integer customerId, String note, Integer staffUserId) {
         LocalDateTime now = LocalDateTime.now(clock);
 
         RcRecharge failed = requireFailed(failedRechargeId);
@@ -235,7 +242,7 @@ public class RechargeFailureResolutionService {
             throw UnsettledDifferenceException.refundMustBeWhole(lineTotal, amount);
         }
 
-        Tender tender = resolveResidual(failed, new Settlement(mode, customerId, null));
+        Tender tender = resolveResidual(failed, new Settlement(mode, customerId, note));
 
         fulfilment.resolveFailure(failedRechargeId, RechargeStatus.REFUNDED, staffUserId,
                 "refunded " + lineTotal.toPlainString() + " as " + mode.name());
@@ -313,6 +320,13 @@ public class RechargeFailureResolutionService {
      * credit was extended, and only for that line's customer" — reducing a tab
      * that this sale never charged would hand the customer money the shop never
      * took from them.
+     *
+     * <p>⚠ ONE MODE PER TENDER LINE TYPE, and since {@code KEEP_AS_ADVANCE} was
+     * withdrawn on 2026-10-21 there is no longer an unconditional fallback. That
+     * is the point of the withdrawal rather than a side effect: the old fallback
+     * credited {@code ADV_RECHARGE}, which nothing debits, so a UPI-only sale's
+     * only exit left the money owed in a different account forever. {@code UPI}
+     * replaced it, and a mixed basket offers one mode per line it carries.
      */
     private Tender resolveResidual(RcRecharge failed, Settlement asked) {
         List<RcTxnPayment> tenders = payments.findByTxnId(failed.getTxnId());
@@ -321,12 +335,16 @@ public class RechargeFailureResolutionService {
                 .findFirst();
         boolean cashCollected = tenders.stream()
                 .anyMatch(t -> SettlementMethod.CASH.lineType().equals(t.getLineType()));
+        boolean upiCollected = tenders.stream()
+                .anyMatch(t -> SettlementMethod.UPI.lineType().equals(t.getLineType()));
 
         List<ResidualMode> available = new ArrayList<>();
         if (cashCollected) {
             available.add(ResidualMode.CASH);
         }
-        available.add(ResidualMode.KEEP_AS_ADVANCE);
+        if (upiCollected) {
+            available.add(ResidualMode.UPI);
+        }
         if (creditLine.isPresent()) {
             available.add(ResidualMode.CREDIT_REDUCTION);
         }
@@ -335,6 +353,16 @@ public class RechargeFailureResolutionService {
         if (mode == ResidualMode.CASH && !cashCollected) {
             throw new RefundModeNotAvailableException(mode,
                     "no cash was collected on payment P-%d, so there is none to hand back."
+                            .formatted(failed.getTxnId()),
+                    available);
+        }
+        if (mode == ResidualMode.UPI && !upiCollected) {
+            // The same rule as the other two, in the same shape: the money goes
+            // home by a rail it actually arrived on. Refunding by UPI a sale that
+            // was paid in cash would move money out of UPI_CLEARING that never
+            // came in, and the next UPI reconciliation would be short by it.
+            throw new RefundModeNotAvailableException(mode,
+                    "payment P-%d had no UPI line, so there is no transfer to send back."
                             .formatted(failed.getTxnId()),
                     available);
         }
@@ -356,10 +384,12 @@ public class RechargeFailureResolutionService {
             customerId = charged.getCustId();
         }
         if (mode.needsCustomer() && customerId == null) {
-            throw RefundModeNotAvailableException.needsCustomer(mode);
+            throw RefundModeNotAvailableException.needsCustomer(mode, available);
         }
-        if (mode == ResidualMode.KEEP_AS_ADVANCE) {
-            customers.requireCreditable(customerId);
+        if (mode.needsReference() && (asked.note() == null || asked.note().isBlank())) {
+            // The enum owns the rule and this only asks it — review finding 11's
+            // lesson, where voidRecharge hardcoded a rule RechargeStatus claimed.
+            throw new UpiRequiresReferenceException();
         }
         return new Tender(mode, null, customerId, asked.note());
     }
@@ -389,7 +419,7 @@ public class RechargeFailureResolutionService {
                                        String narration, Integer staffUserId,
                                        LocalDateTime now) {
         ledger.postResidual(failed.getRechargeId(), amount, tender.mode(), tender.customerId(),
-                staffUserId, narration, now);
+                staffUserId, narration, tender.note(), now);
 
         if (tender.mode() == ResidualMode.CREDIT_REDUCTION) {
             // A DPAM row with a POSITIVE req_amt, which is how the append-only

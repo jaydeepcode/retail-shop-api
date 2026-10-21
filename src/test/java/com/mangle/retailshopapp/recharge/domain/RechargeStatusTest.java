@@ -23,7 +23,8 @@ class RechargeStatusTest {
     @DisplayName("the legal transitions are exactly design-domain.md §5.4's table")
     void legalTransitions() {
         assertEquals(EnumSet.of(COMPLETED, FAILED), allowedFrom(AWAITING_RECHARGE));
-        assertEquals(EnumSet.of(VOIDED, FAILED), allowedFrom(COMPLETED));
+        assertEquals(EnumSet.of(FAILED), allowedFrom(COMPLETED),
+                "VOIDED was removed from this row on 2026-10-21");
         assertEquals(EnumSet.of(RETRIED, REFUNDED), allowedFrom(FAILED));
         assertEquals(EnumSet.noneOf(RechargeStatus.class), allowedFrom(VOIDED));
         assertEquals(EnumSet.noneOf(RechargeStatus.class), allowedFrom(RETRIED));
@@ -31,14 +32,13 @@ class RechargeStatusTest {
     }
 
     @Test
-    @DisplayName("COMPLETED is not terminal and VOIDED is — log §7.1's correction")
+    @DisplayName("COMPLETED is not terminal, and FAILED is its one exit")
     void completedIsNotTerminal() {
-        // This reverses what design-api.md §3.3 said before 2026-09-29. The two
-        // arrows out of COMPLETED differ in kind on purpose: VOIDED means the
-        // sale should not exist, FAILED means it was recorded right but never
-        // delivered.
+        // That COMPLETED is not terminal reverses what design-api.md §3.3 said
+        // before 2026-09-29, and it still holds — but for ONE arrow now, not two.
+        // §7.1 added VOIDED alongside FAILED; see nothingReachesVoided for why
+        // that half was withdrawn on 2026-10-21.
         assertFalse(COMPLETED.isTerminal());
-        assertTrue(COMPLETED.canTransitionTo(VOIDED));
         assertTrue(COMPLETED.canTransitionTo(FAILED));
 
         assertTrue(VOIDED.isTerminal());
@@ -79,31 +79,33 @@ class RechargeStatusTest {
     }
 
     @Test
-    @DisplayName("⚠ VOIDED mandates a reason and FAILED does not — one status, not two")
-    void reasonIsMandatedByOneStatusOnly() {
-        // The javadoc on requiresReasonOnEntry claimed two statuses while the
-        // body returned one, and nothing called it — so the enum claimed to own a
-        // rule that voidRecharge had hardcoded for itself (review finding 11).
+    @DisplayName("⚠ nothing may transition to VOIDED — it is defined and unreachable")
+    void nothingReachesVoided() {
+        // This replaces the assertion that VOIDED mandated a reason on entry.
+        // There is no entry any more: COMPLETED -> VOIDED was removed on
+        // 2026-10-21 and requiresReasonOnEntry() went with it, because a void
+        // could not return money the customer had actually paid. It credited the
+        // amount back to RCHG_PENDING and nothing could take it out again —
+        // RechargeFailureResolutionService refuses every status but FAILED, and
+        // heldPending has no date filter, so the stranded amount would sit on the
+        // day summary for good. COMPLETED -> FAILED -> REFUNDED does the job and
+        // posts the identical reversal.
         //
-        // log §7.1 attaches the requirement to VOIDED alone: "one new terminal
-        // status, reachable only from COMPLETED, with a mandatory reason", and the
-        // argument is specific to it — a void must not become a back door for
-        // refunding a delivered recharge, and with v1 single-user (FRD §3) there
-        // is no second approver, so the reason IS the control.
-        //
-        // ⚠ V12__Recharge_tables.sql's comment says both VOIDED and FAILED
-        // require one. That comment is wrong, and is deliberately not corrected in
-        // place: V12 is applied, and editing it would change its Flyway checksum.
-        // This assertion is where the rule is settled.
-        assertTrue(VOIDED.requiresReasonOnEntry());
-
+        // ⚠ The CONSTANT stays, because V9 seeds the ref_recharge_status row and
+        // this enum must not drift from it. So the honest shape is a status that
+        // is defined, terminal and unreachable — and this is the test that keeps
+        // it that way. AWAITING_RECHARGE -> VOIDED in particular must not be
+        // added: it was the alternative to removing void and it lost.
         for (RechargeStatus s : RechargeStatus.values()) {
-            if (s != VOIDED) {
-                assertFalse(s.requiresReasonOnEntry(),
-                        s + " must not mandate a reason; design-api.md §3.2's "
-                                + "MarkFailedRequest takes an OPTIONAL one");
-            }
+            assertFalse(s.canTransitionTo(VOIDED),
+                    s + " must not reach VOIDED; #19's endpoint was withdrawn, "
+                            + "not merely unwired");
         }
+
+        // Still terminal, and still mapped, so a row from any other source would
+        // render honestly rather than crash a screen.
+        assertTrue(VOIDED.isTerminal());
+        assertEquals(FailureResolution.NONE, FailureResolution.of(VOIDED));
     }
 
     @Test

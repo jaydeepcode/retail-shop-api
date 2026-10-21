@@ -398,13 +398,20 @@ class RechargeHistoryServiceTest {
         }
 
         @Test
-        @DisplayName("a voided sale drops out of takings for free")
-        void voidDropsOut() {
+        @DisplayName("a withdrawn sale drops out of takings for free")
+        void withdrawnSaleDropsOut() {
             // design-domain.md §5.2's reason for making this a status change
             // rather than a ledger-only correction: the takings query already
             // filters on COMPLETED, so moving the status is what fixes the
             // report. A ledger-only fix would leave the row reading COMPLETED and
             // the takings still inflated.
+            //
+            // ⚠ THIS USED TO DRIVE voidRecharge, which was removed on 2026-10-21.
+            // The assertion it makes is about the TAKINGS QUERY and not about the
+            // void path, so it is rewritten against COMPLETED -> FAILED rather
+            // than deleted — that is now the only exit from COMPLETED, and it is
+            // what records a sale that should never have been entered. The reason
+            // carries the real explanation in place of the lost label.
             var settled = settle("ARTL", "199.00", "key-sum-7");
             long rechargeId = settled.recharges().get(0).getRechargeId();
             fulfilment.markCompleted(rechargeId, null, null, staffUserId);
@@ -412,7 +419,7 @@ class RechargeHistoryServiceTest {
             assertEquals(new BigDecimal("199.00"),
                     history.daySummary(LocalDate.now()).totalTakings());
 
-            fulfilment.voidRecharge(rechargeId, "entered twice", staffUserId);
+            fulfilment.markFailed(rechargeId, "entered twice", staffUserId);
 
             assertEquals(new BigDecimal("0.00"),
                     history.daySummary(LocalDate.now()).totalTakings(),

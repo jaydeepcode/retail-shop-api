@@ -15,6 +15,12 @@ import com.mangle.retailshopapp.recharge.domain.ResidualMode;
  * rule this exception enforces: "credit reduction only where credit was
  * extended, and only for that line's customer".
  *
+ * <p>Since {@code KEEP_AS_ADVANCE} was withdrawn on 2026-10-21 every mode is
+ * conditional, so {@code available} is derived entirely from the payment's tender
+ * lines. It cannot come back empty: V12's header invariant makes the lines sum to
+ * the total, so a settled payment carries at least one, and each of the three
+ * line types enables exactly one mode.
+ *
  * <p>Lists what IS available in {@code details}, because a counter that is told
  * only "no" has to guess, and the answer is already known here.
  */
@@ -28,10 +34,21 @@ public class RefundModeNotAvailableException extends RechargeRuleViolationExcept
                         "available", available.stream().map(Enum::name).toList()));
     }
 
-    /** A mode that needs a named customer was asked for without one. */
-    public static RefundModeNotAvailableException needsCustomer(ResidualMode requested) {
+    /**
+     * A mode that needs a named customer was asked for without one.
+     *
+     * <p>⚠ A BACKSTOP RATHER THAN A LIVE PATH since 2026-10-21.
+     * {@code CREDIT_REDUCTION} is the only mode left with
+     * {@code needsCustomer()}, and its customer is read from the payment's credit
+     * line, where {@code rc_credit_req.CUST_ID} is {@code NOT NULL} — so nothing
+     * can reach this today. It is kept because it is the check that stops a
+     * {@code REQUIRES_PARTY} leg becoming a posting failure instead of a 422, and
+     * a future mode would need it again.
+     */
+    public static RefundModeNotAvailableException needsCustomer(
+            ResidualMode requested, java.util.List<ResidualMode> available) {
         return new RefundModeNotAvailableException(requested,
                 "it must name the customer whose account the money goes to.",
-                java.util.List.of(ResidualMode.CASH));
+                available);
     }
 }

@@ -44,10 +44,16 @@ public record RetryRechargeRequest(
     /**
      * How the remainder gets back to the customer (log §7.4's table).
      *
-     * <p>{@code customerId} is needed by {@code KEEP_AS_ADVANCE} and ignored by
-     * {@code CREDIT_REDUCTION} — the latter's customer is a fact about the
-     * original payment's credit line, not a choice, because
-     * design-api.md:789 scopes a credit reduction to "that line's customer".
+     * <p>{@code customerId} is needed by no mode since {@code KEEP_AS_ADVANCE}
+     * was withdrawn: {@code CASH} and {@code UPI} credit accounts with
+     * {@code REQUIRES_PARTY = FALSE}, and {@code CREDIT_REDUCTION}'s customer is
+     * a fact about the original payment's credit line rather than a choice,
+     * because design-api.md:789 scopes a credit reduction to "that line's
+     * customer". Sent anyway, it still selects whose credit position comes back
+     * in the response.
+     *
+     * <p>⚠ {@code note} is REQUIRED when {@code mode = UPI} and carries the UPI
+     * transaction reference ({@code ResidualMode.needsReference()}).
      */
     public record DifferenceSettlement(
             @NotNull(message = "a settlement mode is required") ResidualMode mode,

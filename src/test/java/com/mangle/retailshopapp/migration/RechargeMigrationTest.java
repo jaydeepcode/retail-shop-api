@@ -118,6 +118,12 @@ class RechargeMigrationTest {
         assertEquals(6, count("SELECT COUNT(*) FROM ref_recharge_status"));
         // log §7.1: COMPLETED stopped being terminal so that a mis-marked sale
         // has a correction path which also drops it out of the day's takings.
+        //
+        // ⚠ VOIDED IS STILL SEEDED AND NO LONGER REACHABLE. The void path was
+        // removed on 2026-10-21 and the row deliberately kept: V9 is already
+        // applied to the developer restore, so unseeding it would cost a
+        // migration for no gain. RechargeStatus must not drift from these six,
+        // which is what its matchesReferenceTable test holds.
         assertTrue(exists("SELECT 1 FROM ref_recharge_status WHERE CODE = 'VOIDED' AND IS_TERMINAL = 1"));
         assertTrue(exists("SELECT 1 FROM ref_recharge_status WHERE CODE = 'COMPLETED' AND IS_TERMINAL = 0"));
         // FAILED is deliberately the open state: "unresolved failures" is then

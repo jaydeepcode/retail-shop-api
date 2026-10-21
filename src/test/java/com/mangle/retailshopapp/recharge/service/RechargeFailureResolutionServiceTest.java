@@ -33,6 +33,7 @@ import com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionExcept
 import com.mangle.retailshopapp.recharge.exception.InvalidTenderException;
 import com.mangle.retailshopapp.recharge.exception.RefundModeNotAvailableException;
 import com.mangle.retailshopapp.recharge.exception.UnsettledDifferenceException;
+import com.mangle.retailshopapp.recharge.exception.UpiRequiresReferenceException;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeFailureResolutionService.Settlement;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedRecharge;
@@ -224,30 +225,68 @@ class RechargeFailureResolutionServiceTest {
     }
 
     @Test
-    @DisplayName("a lower retry can leave the difference on the customer's account")
-    void retryLowerKeptAsAdvance() {
-        // log §2.8's account, and the case is evidenced in live data: two
-        // customers already carry +Rs 37 and +Rs 15 from exactly this.
-        int customerId = insertCustomer("Asha", "Keeps", "9000000011");
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-advance");
+    @DisplayName("a lower retry sends the difference back by UPI when the sale came in by UPI")
+    void retryLowerRefundedByUpi() {
+        // ⚠ THIS TEST REPLACES retryLowerKeptAsAdvance, and the replacement is
+        // the point. KEEP_AS_ADVANCE was withdrawn on 2026-10-21: it credited
+        // ADV_RECHARGE, which nothing in the codebase debits, so the liability
+        // changed shape instead of leaving. UPI is the mode that made the
+        // withdrawal safe, and it is the exact mirror of the tender leg.
+        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7781",
+                "key-retry-upi");
 
         var retried = resolution.retry(failedId, new BigDecimal("199.00"),
-                new Settlement(ResidualMode.KEEP_AS_ADVANCE, customerId, "keep it"),
-                null, staffUserId);
+                new Settlement(ResidualMode.UPI, null, "UPI-OUT-4420"), null, staffUserId);
+
+        assertEquals(new BigDecimal("100.00"), retried.plan().differenceOwed());
+        assertEquals(ResidualMode.UPI, retried.differenceSettledAs());
 
         String key = RechargeLedgerPostings.residualKey(failedId);
         assertEquals("100.00", legAmount(key, "RCHG_PENDING", "DR_AMOUNT"));
-        assertEquals("100.00", legAmount(key, "ADV_RECHARGE", "CR_AMOUNT"));
-        assertEquals(customerId, Integer.parseInt(scalar(
-                "SELECT l.PARTY_CUST_ID FROM acc_voucher_line l "
+        assertEquals("100.00", legAmount(key, "UPI_CLEARING", "CR_AMOUNT"));
+        assertEquals("UPI", scalar(
+                "SELECT l.PAYMENT_METHOD FROM acc_voucher_line l "
                         + "JOIN acc_voucher v ON v.VOUCHER_ID = l.VOUCHER_ID "
                         + "WHERE v.IDEMPOTENCY_KEY = '" + key + "' "
-                        + "AND l.ACCOUNT_CODE = 'ADV_RECHARGE'")),
-                "ADV_RECHARGE has REQUIRES_PARTY = TRUE; a leg without one cannot post");
+                        + "AND l.ACCOUNT_CODE = 'UPI_CLEARING'"),
+                "lineType(), so the leg reconciles alongside the UPI tender it mirrors");
+        assertEquals("UPI-OUT-4420", scalar(
+                "SELECT l.LINE_NARRATION FROM acc_voucher_line l "
+                        + "JOIN acc_voucher v ON v.VOUCHER_ID = l.VOUCHER_ID "
+                        + "WHERE v.IDEMPOTENCY_KEY = '" + key + "' "
+                        + "AND l.ACCOUNT_CODE = 'UPI_CLEARING'"),
+                "the transaction reference is on the leg, which is where UPI "
+                        + "reconciliation against the bank reads it");
 
-        assertEquals("299.00", netOf("CASH_RECHARGE", "DR_MINUS_CR"),
-                "no cash left the drawer — the customer chose to leave it with the shop");
-        assertNotNull(retried.creditPosition());
+        assertEquals("199.00", netOf("RCHG_PENDING", "CR_MINUS_DR"),
+                "what remains held is exactly what the retry will consume");
+        assertEquals("199.00", netOf("UPI_CLEARING", "DR_MINUS_CR"),
+                "and UPI_CLEARING is down by the hundred that went back");
+        assertNull(retried.creditPosition(),
+                "a UPI refund names nobody — UPI_CLEARING is REQUIRES_PARTY = FALSE, "
+                        + "so the walk-in stays anonymous as a cash one does");
+    }
+
+    @Test
+    @DisplayName("⚠ a UPI residual with no transaction reference is refused")
+    void upiResidualNeedsAReference() {
+        // The whole value of this mode is a trace back to the actual transfer.
+        // UPI_CLEARING is IS_RECONCILABLE, so the outgoing amount surfaces when
+        // UPI is reconciled against the bank — and a blank reference is found at
+        // reconciliation time, when the transfer can no longer be reconstructed.
+        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7782",
+                "key-retry-upi-noref");
+
+        assertThrows(UpiRequiresReferenceException.class,
+                () -> resolution.retry(failedId, new BigDecimal("199.00"),
+                        new Settlement(ResidualMode.UPI, null, "   "), null, staffUserId));
+        assertThrows(UpiRequiresReferenceException.class,
+                () -> resolution.retry(failedId, new BigDecimal("199.00"),
+                        new Settlement(ResidualMode.UPI, null, null), null, staffUserId));
+
+        assertEquals(RechargeStatus.FAILED, find(failedId).getStatusCode(),
+                "refused before anything was written — the modes are checked "
+                        + "before the parent is closed");
     }
 
     @Test
@@ -431,7 +470,7 @@ class RechargeFailureResolutionServiceTest {
                 "250.00", "key-refund-cash");
 
         var refunded = resolution.refund(failedId, new BigDecimal("250.00"), ResidualMode.CASH,
-                null, staffUserId);
+                null, null, staffUserId);
 
         assertEquals(new BigDecimal("250.00"), refunded.amount(),
                 "the surcharge is refunded too — the fee was for a recharge that "
@@ -454,7 +493,7 @@ class RechargeFailureResolutionServiceTest {
 
         assertThrows(UnsettledDifferenceException.class,
                 () -> resolution.refund(failedId, new BigDecimal("200.00"), ResidualMode.CASH,
-                        null, staffUserId));
+                        null, null, staffUserId));
         assertEquals(RechargeStatus.FAILED, find(failedId).getStatusCode());
     }
 
@@ -476,10 +515,10 @@ class RechargeFailureResolutionServiceTest {
         // is no choice to offer."
         assertThrows(RefundModeNotAvailableException.class,
                 () -> resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH,
-                        null, staffUserId));
+                        null, null, staffUserId));
 
         var refunded = resolution.refund(failedId, new BigDecimal("299.00"),
-                ResidualMode.CREDIT_REDUCTION, null, staffUserId);
+                ResidualMode.CREDIT_REDUCTION, null, null, staffUserId);
 
         String key = RechargeLedgerPostings.residualKey(failedId);
         assertEquals("299.00", legAmount(key, "RCHG_PENDING", "DR_AMOUNT"));
@@ -495,6 +534,75 @@ class RechargeFailureResolutionServiceTest {
     }
 
     @Test
+    @DisplayName("a UPI sale's refund goes back by UPI and both legs return to zero")
+    void refundByUpi() {
+        // ⚠ THE CASE THAT HAD NO GOOD EXIT. Before ResidualMode.UPI, a UPI-only
+        // sale could only reach KEEP_AS_ADVANCE, which credited ADV_RECHARGE —
+        // an account nothing debits, with no SettlementMethod.ADVANCE to draw it
+        // down and invisible to the credit book. The liability changed shape
+        // rather than leaving. This is what it does instead.
+        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7783",
+                "key-refund-upi");
+
+        assertEquals("299.00", netOf("UPI_CLEARING", "DR_MINUS_CR"),
+                "the sale debited UPI_CLEARING");
+
+        var refunded = resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.UPI,
+                null, "UPI-OUT-4421", staffUserId);
+
+        String key = RechargeLedgerPostings.residualKey(failedId);
+        assertEquals("299.00", legAmount(key, "RCHG_PENDING", "DR_AMOUNT"));
+        assertEquals("299.00", legAmount(key, "UPI_CLEARING", "CR_AMOUNT"));
+
+        assertEquals("0.00", netOf("RCHG_PENDING", "CR_MINUS_DR"));
+        assertEquals("0.00", netOf("UPI_CLEARING", "DR_MINUS_CR"),
+                "and UPI_CLEARING is back to zero — nothing is left owing anywhere, "
+                        + "which is what KEEP_AS_ADVANCE could not manage");
+        assertEquals("0.00", netOf("CASH_RECHARGE", "DR_MINUS_CR"),
+                "the drawer never moved: this sale was never cash");
+        assertEquals(RechargeStatus.REFUNDED, find(failedId).getStatusCode());
+        assertNull(refunded.creditPosition(), "a UPI refund names nobody");
+    }
+
+    @Test
+    @DisplayName("⚠ a UPI refund with no transaction reference is refused")
+    void upiRefundNeedsAReference() {
+        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7784",
+                "key-refund-upi-noref");
+
+        assertThrows(UpiRequiresReferenceException.class,
+                () -> resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.UPI,
+                        null, null, staffUserId));
+        assertEquals(RechargeStatus.FAILED, find(failedId).getStatusCode(),
+                "and nothing was resolved");
+    }
+
+    @Test
+    @DisplayName("each mode is offered only where its own tender line exists")
+    void modesFollowTheOriginalPayment() {
+        // ⚠ THERE IS NO UNCONDITIONAL FALLBACK ANY MORE. KEEP_AS_ADVANCE used to
+        // be offered on every payment, which is what let a UPI-only sale reach a
+        // one-way door. Every mode is now a fact about the original payment, and
+        // the money goes home by a rail it actually arrived on.
+        long cashSale = settleThenFail("RJIO", "299.00", "key-modes-cash");
+        long upiSale = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7785", "key-modes-upi");
+
+        var refusedUpi = assertThrows(RefundModeNotAvailableException.class,
+                () -> resolution.refund(cashSale, new BigDecimal("299.00"), ResidualMode.UPI,
+                        null, "UPI-OUT-9999", staffUserId));
+        assertTrue(refusedUpi.getMessage().contains("no UPI line"),
+                "refunding by UPI a sale paid in cash would take money out of "
+                        + "UPI_CLEARING that never came in");
+
+        assertThrows(RefundModeNotAvailableException.class,
+                () -> resolution.refund(upiSale, new BigDecimal("299.00"), ResidualMode.CASH,
+                        null, null, staffUserId));
+        assertThrows(RefundModeNotAvailableException.class,
+                () -> resolution.refund(upiSale, new BigDecimal("299.00"),
+                        ResidualMode.CREDIT_REDUCTION, null, null, staffUserId));
+    }
+
+    @Test
     @DisplayName("a credit reduction is refused where the sale took no credit")
     void creditReductionNeedsACreditLine() {
         // design-api.md:789 — "only where credit was extended". Reducing a tab
@@ -504,7 +612,7 @@ class RechargeFailureResolutionServiceTest {
 
         assertThrows(RefundModeNotAvailableException.class,
                 () -> resolution.refund(failedId, new BigDecimal("299.00"),
-                        ResidualMode.CREDIT_REDUCTION, customerId, staffUserId));
+                        ResidualMode.CREDIT_REDUCTION, customerId, null, staffUserId));
     }
 
     @Test
@@ -518,7 +626,7 @@ class RechargeFailureResolutionServiceTest {
         long failedId = settleThenComplete("BSNL", "147.00", "key-refund-after-complete");
         fulfilment.markFailed(failedId, "operator reversed it", staffUserId);
 
-        resolution.refund(failedId, new BigDecimal("147.00"), ResidualMode.CASH, null,
+        resolution.refund(failedId, new BigDecimal("147.00"), ResidualMode.CASH, null, null,
                 staffUserId);
 
         assertEquals("0.00", netOf("INC_RCHG_COMM", "CR_MINUS_DR"),
@@ -534,12 +642,12 @@ class RechargeFailureResolutionServiceTest {
     @DisplayName("resolving an already-resolved failure is refused")
     void refundTwice() {
         long failedId = settleThenFail("RJIO", "299.00", "key-refund-twice");
-        resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH, null,
+        resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH, null, null,
                 staffUserId);
 
         assertThrows(FailureAlreadyResolvedException.class,
                 () -> resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH,
-                        null, staffUserId));
+                        null, null, staffUserId));
     }
 
     @Test
@@ -559,7 +667,7 @@ class RechargeFailureResolutionServiceTest {
         long failedId = settleThenFail("RJIO", "299.00", "key-till-refund");
         settleThenComplete("BSNL", "147.00", "key-till-kept");
 
-        resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH, null,
+        resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH, null, null,
                 staffUserId);
 
         var summary = historyService.daySummary(today);
@@ -612,6 +720,28 @@ class RechargeFailureResolutionServiceTest {
                 List.of(new RequestedRecharge(type, number, operator, new BigDecimal(amount),
                         null)),
                 List.of(cash(paid, paid)), staffUserId, key);
+        long id = settled.recharges().get(0).getRechargeId();
+        fulfilment.markFailed(id, "operator declined", staffUserId);
+        return id;
+    }
+
+    /**
+     * A sale settled entirely by UPI, then failed — the shape that had no good
+     * exit before {@code ResidualMode.UPI}.
+     *
+     * <p>Live on 2026-10-19 the only mode such a sale could reach was
+     * {@code KEEP_AS_ADVANCE}, which left ₹250 credited to {@code ADV_RECHARGE}
+     * while the customer's {@code advanceHeld} read 0.00 and their statement was
+     * empty, because the credit book reads the {@code rc_credit_req} tally and
+     * not the ledger.
+     */
+    private long settleThenFailByUpi(String operator, String amount, String reference,
+                                     String key) {
+        var settled = settlement.settle(
+                List.of(mobile(operator, amount)),
+                List.of(new RequestedTender(SettlementMethod.UPI, new BigDecimal(amount),
+                        null, reference, null, null)),
+                staffUserId, key);
         long id = settled.recharges().get(0).getRechargeId();
         fulfilment.markFailed(id, "operator declined", staffUserId);
         return id;
