@@ -19,10 +19,13 @@ import jakarta.validation.constraints.Size;
  * cleared.
  *
  * <p>{@code mode} carries the third option §3.2 does not name. #13 says "cash
- * back, or reduce the customer's credit tab", which is two; log §7.4's table has
- * three, the third being money the customer asks the shop to keep
- * ({@code KEEP_AS_ADVANCE} → {@code ADV_RECHARGE}). §7.4 is the later document
- * and it says the three are one posting rule, so all three are accepted here.
+ * back, or reduce the customer's credit tab", which is two; the third is
+ * {@code UPI}, which sends a UPI-settled sale back down the rail it arrived on.
+ * log §7.4's table named a different third — money the customer asks the shop to
+ * keep ({@code KEEP_AS_ADVANCE} → {@code ADV_RECHARGE}) — and that one was
+ * WITHDRAWN on 2026-10-21 because nothing ever debits {@code ADV_RECHARGE}, so
+ * it changed the liability's shape instead of ending it. See
+ * {@link ResidualMode}.
  */
 public record RefundRechargeRequest(
 
@@ -34,9 +37,20 @@ public record RefundRechargeRequest(
         @NotNull(message = "a refund mode is required")
         ResidualMode mode,
 
-        /** Required by {@code KEEP_AS_ADVANCE}; derived for {@code CREDIT_REDUCTION}. */
+        /**
+         * Derived for {@code CREDIT_REDUCTION}; needed by no mode since
+         * {@code KEEP_AS_ADVANCE} was withdrawn. Sent anyway, it still selects
+         * whose credit position comes back in the response.
+         */
         Integer customerId,
 
+        /**
+         * ⚠ REQUIRED WHEN {@code mode = UPI}, where it is the UPI transaction
+         * reference and lands on the {@code UPI_CLEARING} leg. Optional otherwise.
+         * Not a {@code @NotBlank} here because the rule is conditional on another
+         * field — {@code ResidualMode.needsReference()} owns it, and the service
+         * raises {@code UPI_REQUIRES_REFERENCE}.
+         */
         @Size(max = 255, message = "a note is at most 255 characters")
         String note) {
 }

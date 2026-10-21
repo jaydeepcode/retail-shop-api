@@ -82,7 +82,6 @@ public class RechargeLedgerPostings {
     static final String CASH_RECHARGE = "CASH_RECHARGE";
     static final String UPI_CLEARING = "UPI_CLEARING";
     static final String AR_RECHARGE = "AR_RECHARGE";
-    static final String ADV_RECHARGE = "ADV_RECHARGE";
     static final String RCHG_PENDING = "RCHG_PENDING";
     static final String INC_RCHG_COMM = "INC_RCHG_COMM";
     static final String INC_RCHG_SURCHARGE = "INC_RCHG_SURCHARGE";
@@ -322,8 +321,8 @@ public class RechargeLedgerPostings {
      * never touches money the shop still holds." The customer genuinely paid and
      * the cash is genuinely in the drawer, so only the completion is reversed and
      * the amount returns to {@code RCHG_PENDING} — from where §7.4's residual
-     * mechanism settles it, by handing it back or keeping it on a named
-     * customer's account.
+     * mechanism settles it, by handing the cash back, refunding by UPI, or
+     * reducing a named customer's tab.
      *
      * <p>Idempotent on its own key, so reversing twice writes nothing. Returns
      * {@code null} when there is no completion voucher to reverse, which is the
@@ -390,7 +389,7 @@ public class RechargeLedgerPostings {
      * have one. §7.3 states the refund voucher in exactly this form and calls it
      * "now trivial".
      *
-     * <p>The four paths that reach this method, and what each has already done:
+     * <p>The three paths that reach this method, and what each has already done:
      *
      * <ol>
      *   <li><b>retry at a lower amount</b> — nothing posted at retry time; this
@@ -400,12 +399,17 @@ public class RechargeLedgerPostings {
      *   <li><b>refund after {@code COMPLETED → FAILED}</b> — the completion was
      *       already reversed by {@link #reverseCompletion} when the status moved,
      *       so the money is back in {@code RCHG_PENDING} and this is again the
-     *       only posting left;
-     *   <li><b>a {@code VOIDED} sale's residual</b> — same as (3). §7.4:
-     *       "Decisions 1 and 4 converge on one screen and one posting rule."
+     *       only posting left. §7.4: "Decisions 1 and 4 converge on one screen and
+     *       one posting rule."
      * </ol>
      *
-     * <p>None of the four needs a reversal written here, and a second one in
+     * <p>⚠ THERE WAS A FOURTH — a {@code VOIDED} sale's residual, which behaved as
+     * (3) does. The void path was removed on 2026-10-21, and the shape of (3) is
+     * exactly why: a void left the money here and nothing could take it out again,
+     * because {@code RechargeFailureResolutionService} accepts no status but
+     * {@code FAILED}.
+     *
+     * <p>None of the three needs a reversal written here, and a second one in
      * case (3) would take the income back twice.
      *
      * <p>The credit side is fixed by the mode and never by the caller's opinion
@@ -413,17 +417,30 @@ public class RechargeLedgerPostings {
      * money genuinely leaves, which is what {@code ref_voucher_type}'s "Money
      * paid out" is, and a journal would file an ordinary refund as a correction.
      *
-     * @param customerId required by both non-cash modes, whose accounts carry
-     *                   {@code REQUIRES_PARTY = TRUE}
+     * @param customerId required by {@code CREDIT_REDUCTION}, whose account
+     *                   carries {@code REQUIRES_PARTY = TRUE}
+     * @param reference the UPI transaction reference, required by {@code UPI} and
+     *                  unused by the other modes. It lands on the
+     *                  {@code UPI_CLEARING} leg, which is where reconciliation
+     *                  against the bank reads it
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public PostedVoucher postResidual(long failedRechargeId, BigDecimal amount, ResidualMode mode,
                                       Integer customerId, Integer staffUserId, String narration,
-                                      LocalDateTime when) {
+                                      String reference, LocalDateTime when) {
         VoucherLeg credit = switch (mode) {
             case CASH -> VoucherLeg.credit(CASH_RECHARGE, amount)
                     .withPaymentMethod(SettlementMethod.CASH.lineType());
-            case KEEP_AS_ADVANCE -> VoucherLeg.credit(ADV_RECHARGE, amount).withParty(customerId);
+            // The exact mirror of postSettlement's UPI tender leg, lineType() and
+            // all: the sale debited UPI_CLEARING and this credits it, so both
+            // legs return to zero. The narration carries the UPI transaction
+            // reference, which ResidualMode.needsReference() makes mandatory —
+            // UPI_CLEARING is IS_RECONCILABLE, so this amount surfaces when UPI
+            // is reconciled against the bank and the reference is what makes it
+            // identifiable there.
+            case UPI -> VoucherLeg.credit(UPI_CLEARING, amount)
+                    .withPaymentMethod(SettlementMethod.UPI.lineType())
+                    .withNarration(reference);
             case CREDIT_REDUCTION -> VoucherLeg.credit(AR_RECHARGE, amount).withParty(customerId);
         };
 
@@ -495,7 +512,7 @@ public class RechargeLedgerPostings {
      * {@code REFUND:rc_recharge#<id>:RESIDUAL} — keyed on the FAILED recharge.
      *
      * <p>Keyed on the failure rather than on the retry that may follow it,
-     * because all four paths into {@link #postResidual} have a failed recharge
+     * because all three paths into {@link #postResidual} have a failed recharge
      * and only one of them has a retry. V29's unique key makes one failure
      * resolvable once, so this key is unique by the same guarantee.
      */

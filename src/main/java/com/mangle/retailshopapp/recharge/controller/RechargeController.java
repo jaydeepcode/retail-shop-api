@@ -38,7 +38,6 @@ import com.mangle.retailshopapp.recharge.model.request.CreateCustomerRequest;
 import com.mangle.retailshopapp.recharge.model.request.RefundRechargeRequest;
 import com.mangle.retailshopapp.recharge.model.request.RetryRechargeRequest;
 import com.mangle.retailshopapp.recharge.model.request.SettleBasketRequest;
-import com.mangle.retailshopapp.recharge.model.request.VoidRechargeRequest;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse.OperatorConfig;
 import com.mangle.retailshopapp.recharge.model.response.CounterConfigResponse.RouteConfig;
@@ -109,10 +108,26 @@ import java.security.Principal;
  * straight from a controller with no service and no transaction. Nothing here
  * writes.
  *
- * <p><b>This slice ships 18 of §3.2's 19 endpoints.</b> Everything the counter,
- * the worklist, history, the end-of-day read, resolving a failure and the credit
- * book's two reads. The one left is #16, taking a payment against a tab, and it
- * is deferred deliberately rather than forgotten: design-ledger.md §6.3 makes
+ * <p><b>This slice ships 17 of §3.2's 18 live endpoints.</b> Everything the
+ * counter, the worklist, history, the end-of-day read, resolving a failure and
+ * the credit book's two reads.
+ *
+ * <p>⚠ §3.2 LISTS 19, AND #19 WAS WITHDRAWN on 2026-10-21 rather than left
+ * unshipped. {@code POST /recharges/{id}/void} was built and it worked; it was
+ * removed because {@code VOIDED} means "the sale should never have been
+ * recorded", which is exactly the case where the customer was charged and the
+ * money has to go back — and a void could not return it. It credited the amount
+ * to {@code RCHG_PENDING} and left it there: the residual mechanism that was
+ * supposed to settle it from there refuses any status that is not
+ * {@code FAILED}, and {@code heldPending} has no date filter, so the stranded
+ * amount would have sat on the day summary for good.
+ * {@code COMPLETED → FAILED → REFUNDED} does the same job, posts the same
+ * reversal, and both halves have screens. What is lost is the LABEL, not the
+ * correction — {@code MarkFailedRequest} takes an optional reason, so "we keyed
+ * it twice" is still recorded.
+ *
+ * <p>The other one left is #16, taking a payment against a tab, and it is
+ * deferred deliberately rather than forgotten: design-ledger.md §6.3 makes
  * the LEDGER the authority for receivables from go-live and retires
  * {@code rc_credit_req} to a derived subledger, so a receipt should clear a
  * customer's {@code AR_*} legs oldest-first — each of which names its own
@@ -363,25 +378,6 @@ public class RechargeController {
         return mapper.toRecharge(fulfilment.markFailed(rechargeId, reason, staffIdOf(principal)));
     }
 
-    /**
-     * Void a completed sale (#19).
-     *
-     * <p>⚠ THE REVERSING VOUCHER IS NOT POSTED YET. The status moves — which is
-     * what drops the sale out of takings, since that query filters on
-     * {@code COMPLETED} — but the correcting entry needs
-     * {@code LedgerCorrectionRules} wired to a caller, which S2 left outstanding.
-     * Until then the ledger overstates income after a void, so this endpoint must
-     * not be put in front of staff. Raised in the PR; said here so nobody wires a
-     * button to it first.
-     */
-    @PostMapping("/recharges/{rechargeId}/void")
-    public RechargeResponse voidRecharge(@PathVariable long rechargeId,
-                                         @Valid @RequestBody VoidRechargeRequest request,
-                                         Principal principal) {
-        return mapper.toRecharge(
-                fulfilment.voidRecharge(rechargeId, request.reason(), staffIdOf(principal)));
-    }
-
     // ------------------------------------------------------------------
     // #14, #15 — the credit book (requirements 6, 9)
     // ------------------------------------------------------------------
@@ -497,10 +493,16 @@ public class RechargeController {
     /**
      * Refund a failed recharge (#13).
      *
-     * <p>Cash back, the customer's tab reduced, or kept on their account — log
-     * §7.4's three, of which §3.2 names the first two. Which are AVAILABLE is a
-     * fact about the original payment and not a choice: a sale that went out on
-     * credit collected no cash, so there is none to hand back.
+     * <p>Cash back, a UPI transfer sent back, or the customer's tab reduced —
+     * log §7.4's table as amended on 2026-10-21, of which §3.2 names the first
+     * and the last. Which are AVAILABLE is a fact about the original payment and
+     * not a choice: the money goes home by a rail it actually arrived on, so a
+     * sale that went out on credit collected no cash and has none to hand back.
+     *
+     * <p>⚠ {@code note} is MANDATORY when {@code mode = UPI} and carries the UPI
+     * transaction reference — a 422 {@code UPI_REQUIRES_REFERENCE}. It is also
+     * the first mode that reads {@code note} at all: until 2026-10-21 the field
+     * was accepted here and dropped in the service.
      */
     @PostMapping("/recharges/{rechargeId}/refund")
     public ResponseEntity<RefundResponse> refund(
@@ -509,7 +511,7 @@ public class RechargeController {
             Principal principal) {
 
         var refunded = resolution.refund(rechargeId, request.amount(), request.mode(),
-                request.customerId(), staffIdOf(principal));
+                request.customerId(), request.note(), staffIdOf(principal));
         RefundResponse body = mapper.toRefund(refunded,
                 refunded.customerId() == null ? null
                         : customers.requireCreditable(refunded.customerId()),

@@ -11,7 +11,6 @@ import com.mangle.retailshopapp.recharge.domain.FailureResolution;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.exception.FailureAlreadyResolvedException;
 import com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionException;
-import com.mangle.retailshopapp.recharge.exception.ReasonRequiredException;
 import com.mangle.retailshopapp.recharge.exception.RechargeNotFound;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RcRechargeStatusHist;
@@ -153,6 +152,17 @@ public class RechargeFulfilmentService {
      * voucher is reversed — otherwise {@code INC_RCHG_COMM} and the float
      * consumption would stay recognised for a recharge that did not happen, while
      * the day summary dropped the sale from takings and reported nothing held.
+     *
+     * <p>⚠ AND IT IS NOW THE ONLY WAY OUT OF {@code COMPLETED}. {@code #19}'s
+     * {@code voidRecharge} was removed on 2026-10-21, so a sale that should never
+     * have been recorded — a duplicate entry, a wrong number — is corrected by
+     * {@code COMPLETED → FAILED → REFUNDED} instead. That is a deliberate
+     * substitution rather than a loss of capability: a void returned the amount to
+     * {@code RCHG_PENDING} and nothing could take it out again, because
+     * {@code RechargeFailureResolutionService} refuses every status but
+     * {@code FAILED}. This path posts the identical reversal and then has a refund
+     * behind it. The {@code reason} is where the real explanation goes, and it is
+     * what carries "we keyed it twice" now that the LABEL is gone.
      */
     @Transactional
     public RcRecharge markFailed(long rechargeId, String reason, Integer staffUserId) {
@@ -181,52 +191,6 @@ public class RechargeFulfilmentService {
                     reason == null || reason.isBlank() ? "marked failed after completion" : reason,
                     now);
         }
-        return recharge;
-    }
-
-    /**
-     * Voids a completed sale — the sale should not exist (§3.2 endpoint #19).
-     *
-     * <p>⚠ THE MANDATORY REASON IS THE CONTROL, not paperwork. log §7.1: a void
-     * must not become a back door for refunding a DELIVERED recharge, because
-     * reversing the float legs would restore float that never came back and the
-     * next portal reconciliation would show the gap. There is no second approver,
-     * because FRD §3 fixes v1 as single-user — so the reason plus float
-     * reconciliation is all there is.
-     *
-     * <p>⚠ THE CASH LEG IS UNTOUCHED. §3.2: "a void never touches money the shop
-     * still holds." The cash was genuinely collected and is genuinely still in the
-     * drawer, so only the COMPLETION voucher is reversed and the amount returns to
-     * {@code RCHG_PENDING}, from where §7.4's residual mechanism settles it.
-     *
-     * <p>⚠ THE REVERSAL IS NOW POSTED, which it was not when this slice was first
-     * written. A status change alone left the ledger overstating income, because
-     * the status drops the sale out of takings while the completion voucher stays.
-     * {@link RechargeLedgerPostings#reverseCompletion} writes a dated reversing
-     * JOURNAL — the form FRD §8.3 mandates after a reconciliation point and which
-     * is correct before one too, so it does not wait on
-     * {@code LedgerCorrectionRules} choosing between a journal and a
-     * delete-and-repost.
-     */
-    @Transactional
-    public RcRecharge voidRecharge(long rechargeId, String reason, Integer staffUserId) {
-        // Asked of the state machine rather than hardcoded here, which is what
-        // review finding 11 was about: the enum claimed to own this rule and
-        // nothing consulted it, so a second reason-mandating status or a second
-        // mutation path would not have picked it up.
-        if (RechargeStatus.VOIDED.requiresReasonOnEntry()
-                && (reason == null || reason.isBlank())) {
-            throw new ReasonRequiredException("void a recharge");
-        }
-        RcRecharge recharge = lockOrThrow(rechargeId);
-        assertLegal(recharge, RechargeStatus.VOIDED);
-
-        LocalDateTime now = LocalDateTime.now(clock);
-        apply(recharge, RechargeStatus.VOIDED, staffUserId, reason.trim(), now);
-
-        // VOIDED is reachable only from COMPLETED, so there is always a
-        // completion voucher to take back.
-        ledger.reverseCompletion(recharge, staffUserId, reason.trim(), now);
         return recharge;
     }
 
