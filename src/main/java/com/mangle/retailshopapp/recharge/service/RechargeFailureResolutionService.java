@@ -127,7 +127,7 @@ public class RechargeFailureResolutionService {
      *              when, there is one
      */
     @Transactional
-    public Retried retry(long failedRechargeId, BigDecimal amount, Settlement difference,
+    public Retried retry(int failedRechargeId, BigDecimal amount, Settlement difference,
                          Settlement topUp, Integer staffUserId) {
         LocalDateTime now = LocalDateTime.now(clock);
 
@@ -231,7 +231,7 @@ public class RechargeFailureResolutionService {
      *             which went unnoticed because no mode did anything with it
      */
     @Transactional
-    public Refunded refund(long failedRechargeId, BigDecimal amount, ResidualMode mode,
+    public Refunded refund(int failedRechargeId, BigDecimal amount, ResidualMode mode,
                            Integer customerId, String note, Integer staffUserId) {
         LocalDateTime now = LocalDateTime.now(clock);
 
@@ -267,7 +267,7 @@ public class RechargeFailureResolutionService {
      * the check and the write are not one decision — and taking it twice in one
      * transaction is free.
      */
-    private RcRecharge requireFailed(long rechargeId) {
+    private RcRecharge requireFailed(int rechargeId) {
         RcRecharge recharge = recharges.findById(rechargeId)
                 .orElseThrow(() -> new RechargeNotFound(rechargeId));
         if (recharge.getStatusCode() != RechargeStatus.FAILED) {

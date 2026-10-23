@@ -17,7 +17,7 @@ import java.util.Map;
  */
 public class DuplicateRetryException extends RechargeConflictException {
 
-    public DuplicateRetryException(long failedRechargeId) {
+    public DuplicateRetryException(int failedRechargeId) {
         super(ErrorCode.DUPLICATE_RETRY,
                 "Recharge %d has already been retried.".formatted(failedRechargeId),
                 Map.of("rechargeId", failedRechargeId));

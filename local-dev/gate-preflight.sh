@@ -21,7 +21,7 @@ DB_USER="${DB_USER:-CISADM}"
 DB_PASS="${DB_PASS:-s3pass}"
 
 # The head this build expects. Keep in step with spring.flyway.target.
-EXPECTED_HEAD=29
+EXPECTED_HEAD=30
 
 failures=0
 pass() { printf '  \033[32m✓\033[0m %s\n' "$1"; }

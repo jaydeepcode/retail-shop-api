@@ -15,7 +15,7 @@ import com.mangle.retailshopapp.recharge.domain.ServiceType;
  * list that happens to have no rows.
  */
 public record RechargeWorkItemResponse(
-        long rechargeId,
+        int rechargeId,
         String reference,
         ServiceType serviceType,
         String number,

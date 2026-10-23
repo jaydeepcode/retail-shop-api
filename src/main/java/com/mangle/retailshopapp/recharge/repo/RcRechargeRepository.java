@@ -21,7 +21,7 @@ import jakarta.persistence.LockModeType;
  * {@code package-info} for why that split is enforcement rather than style.
  */
 @Repository
-public interface RcRechargeRepository extends JpaRepository<RcRecharge, Long> {
+public interface RcRechargeRepository extends JpaRepository<RcRecharge, Integer> {
 
     /**
      * Re-reads a recharge for update, holding a row lock until the transaction
@@ -46,7 +46,7 @@ public interface RcRechargeRepository extends JpaRepository<RcRecharge, Long> {
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from RcRecharge r where r.rechargeId = :id")
-    Optional<RcRecharge> findByIdForUpdate(@Param("id") Long id);
+    Optional<RcRecharge> findByIdForUpdate(@Param("id") Integer id);
 
     /** Every recharge settled by one payment, in the order they were entered. */
     List<RcRecharge> findByTxnIdOrderBySeqNoAsc(Integer txnId);

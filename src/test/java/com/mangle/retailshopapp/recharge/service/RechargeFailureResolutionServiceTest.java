@@ -153,7 +153,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("a retry at the same amount reuses the payment and posts nothing")
     void retrySameAmount() {
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-same");
+        int failedId = settleThenFail("RJIO", "299.00", "key-retry-same");
         RcRecharge original = find(failedId);
         long vouchersBefore = count("SELECT COUNT(*) FROM acc_voucher");
 
@@ -181,7 +181,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("the retry carries the original's surcharge, route and number")
     void retryCarriesTheLine() {
-        long failedId = settleThenFail(ServiceType.TV, "DISHTV", "02700000001", "240.00",
+        int failedId = settleThenFail(ServiceType.TV, "DISHTV", "02700000001", "240.00",
                 "250.00", "key-retry-carry");
 
         var retried = resolution.retry(failedId, new BigDecimal("200.00"),
@@ -205,7 +205,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("a lower retry hands the difference back in cash")
     void retryLowerCashBack() {
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-lower");
+        int failedId = settleThenFail("RJIO", "299.00", "key-retry-lower");
 
         var retried = resolution.retry(failedId, new BigDecimal("199.00"),
                 new Settlement(ResidualMode.CASH, null, null), null, staffUserId);
@@ -232,7 +232,7 @@ class RechargeFailureResolutionServiceTest {
         // ADV_RECHARGE, which nothing in the codebase debits, so the liability
         // changed shape instead of leaving. UPI is the mode that made the
         // withdrawal safe, and it is the exact mirror of the tender leg.
-        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7781",
+        int failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7781",
                 "key-retry-upi");
 
         var retried = resolution.retry(failedId, new BigDecimal("199.00"),
@@ -274,7 +274,7 @@ class RechargeFailureResolutionServiceTest {
         // UPI_CLEARING is IS_RECONCILABLE, so the outgoing amount surfaces when
         // UPI is reconciled against the bank — and a blank reference is found at
         // reconciliation time, when the transfer can no longer be reconstructed.
-        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7782",
+        int failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7782",
                 "key-retry-upi-noref");
 
         assertThrows(UpiRequiresReferenceException.class,
@@ -292,7 +292,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("a higher retry takes the extra, appends a tender line and raises the total")
     void retryHigherTopUp() {
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-higher");
+        int failedId = settleThenFail("RJIO", "299.00", "key-retry-higher");
         int paymentId = find(failedId).getTxnId();
 
         var retried = resolution.retry(failedId, new BigDecimal("349.00"), null,
@@ -329,7 +329,7 @@ class RechargeFailureResolutionServiceTest {
         // its cash posting landed today, breaking §7.1(c)'s cross-check on both
         // days — and corrupting a day already counted against the drawer.
         LocalDate day1 = LocalDate.now(clock);
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-midnight");
+        int failedId = settleThenFail("RJIO", "299.00", "key-retry-midnight");
 
         ((Movable) clock).advanceOneDay();
         LocalDate day2 = LocalDate.now(clock);
@@ -358,7 +358,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("a lower retry with no settlement is refused before anything is written")
     void unsettledDifference() {
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-unsettled");
+        int failedId = settleThenFail("RJIO", "299.00", "key-retry-unsettled");
         long rechargesBefore = count("SELECT COUNT(*) FROM rc_recharge");
 
         assertThrows(UnsettledDifferenceException.class,
@@ -376,7 +376,7 @@ class RechargeFailureResolutionServiceTest {
     void straySettlement() {
         // Dropping it silently would leave the staff member believing a hundred
         // rupees went back over the counter while the drawer says otherwise.
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-stray");
+        int failedId = settleThenFail("RJIO", "299.00", "key-retry-stray");
 
         assertThrows(UnsettledDifferenceException.class,
                 () -> resolution.retry(failedId, new BigDecimal("299.00"),
@@ -386,7 +386,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("a second retry of one failure is refused")
     void secondRetry() {
-        long failedId = settleThenFail("RJIO", "299.00", "key-retry-twice");
+        int failedId = settleThenFail("RJIO", "299.00", "key-retry-twice");
         resolution.retry(failedId, new BigDecimal("299.00"), null, null, staffUserId);
 
         // The parent is terminal now, so the state machine catches it first.
@@ -422,7 +422,7 @@ class RechargeFailureResolutionServiceTest {
         var settled = settlement.settle(
                 List.of(mobile("RJIO", "299.00")), List.of(cash("299.00", "300.00")),
                 staffUserId, "key-retry-awaiting");
-        long id = settled.recharges().get(0).getRechargeId();
+        int id = settled.recharges().get(0).getRechargeId();
 
         assertThrows(IllegalStatusTransitionException.class,
                 () -> resolution.retry(id, new BigDecimal("199.00"), null, null, staffUserId));
@@ -438,11 +438,11 @@ class RechargeFailureResolutionServiceTest {
         // log §7.2's worked example in miniature: cash at settlement, income at
         // the RETRY's amount and the retry's rate, and RCHG_PENDING empty when
         // the whole life of the sale is over.
-        long failedId = settleThenFail("BSNL", "147.00", "key-retry-complete");
+        int failedId = settleThenFail("BSNL", "147.00", "key-retry-complete");
 
         var retried = resolution.retry(failedId, new BigDecimal("100.00"),
                 new Settlement(ResidualMode.CASH, null, null), null, staffUserId);
-        long retryId = retried.retry().getRechargeId();
+        int retryId = retried.retry().getRechargeId();
 
         fulfilment.markCompleted(retryId, "VND-RETRY", null, staffUserId);
 
@@ -466,7 +466,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("a cash refund returns the whole line total and clears what was held")
     void refundCash() {
-        long failedId = settleThenFail(ServiceType.TV, "DISHTV", "02700000001", "240.00",
+        int failedId = settleThenFail(ServiceType.TV, "DISHTV", "02700000001", "240.00",
                 "250.00", "key-refund-cash");
 
         var refunded = resolution.refund(failedId, new BigDecimal("250.00"), ResidualMode.CASH,
@@ -489,7 +489,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("a partial refund is refused, because REFUNDED is terminal")
     void refundMustBeWhole() {
-        long failedId = settleThenFail("RJIO", "299.00", "key-refund-partial");
+        int failedId = settleThenFail("RJIO", "299.00", "key-refund-partial");
 
         assertThrows(UnsettledDifferenceException.class,
                 () -> resolution.refund(failedId, new BigDecimal("200.00"), ResidualMode.CASH,
@@ -506,7 +506,7 @@ class RechargeFailureResolutionServiceTest {
                 List.of(new RequestedTender(SettlementMethod.CREDIT, new BigDecimal("299.00"),
                         null, null, customerId, "pay Friday")),
                 staffUserId, "key-refund-credit");
-        long failedId = settled.recharges().get(0).getRechargeId();
+        int failedId = settled.recharges().get(0).getRechargeId();
         fulfilment.markFailed(failedId, "operator down", staffUserId);
 
         assertEquals(new BigDecimal("299.00"), credit.positionOf(customerId).owed());
@@ -541,7 +541,7 @@ class RechargeFailureResolutionServiceTest {
         // an account nothing debits, with no SettlementMethod.ADVANCE to draw it
         // down and invisible to the credit book. The liability changed shape
         // rather than leaving. This is what it does instead.
-        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7783",
+        int failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7783",
                 "key-refund-upi");
 
         assertEquals("299.00", netOf("UPI_CLEARING", "DR_MINUS_CR"),
@@ -567,7 +567,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("⚠ a UPI refund with no transaction reference is refused")
     void upiRefundNeedsAReference() {
-        long failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7784",
+        int failedId = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7784",
                 "key-refund-upi-noref");
 
         assertThrows(UpiRequiresReferenceException.class,
@@ -584,8 +584,8 @@ class RechargeFailureResolutionServiceTest {
         // be offered on every payment, which is what let a UPI-only sale reach a
         // one-way door. Every mode is now a fact about the original payment, and
         // the money goes home by a rail it actually arrived on.
-        long cashSale = settleThenFail("RJIO", "299.00", "key-modes-cash");
-        long upiSale = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7785", "key-modes-upi");
+        int cashSale = settleThenFail("RJIO", "299.00", "key-modes-cash");
+        int upiSale = settleThenFailByUpi("RJIO", "299.00", "UPI-IN-7785", "key-modes-upi");
 
         var refusedUpi = assertThrows(RefundModeNotAvailableException.class,
                 () -> resolution.refund(cashSale, new BigDecimal("299.00"), ResidualMode.UPI,
@@ -608,7 +608,7 @@ class RechargeFailureResolutionServiceTest {
         // design-api.md:789 — "only where credit was extended". Reducing a tab
         // this sale never charged would hand back money never taken.
         int customerId = insertCustomer("Chandra", "Uninvolved", "9000000013");
-        long failedId = settleThenFail("RJIO", "299.00", "key-refund-nocredit");
+        int failedId = settleThenFail("RJIO", "299.00", "key-refund-nocredit");
 
         assertThrows(RefundModeNotAvailableException.class,
                 () -> resolution.refund(failedId, new BigDecimal("299.00"),
@@ -623,7 +623,7 @@ class RechargeFailureResolutionServiceTest {
         // completion when the status moved (log §7.1), so by the time the refund
         // runs there is nothing recognised left to take back — a second reversal
         // here would un-earn the commission twice.
-        long failedId = settleThenComplete("BSNL", "147.00", "key-refund-after-complete");
+        int failedId = settleThenComplete("BSNL", "147.00", "key-refund-after-complete");
         fulfilment.markFailed(failedId, "operator reversed it", staffUserId);
 
         resolution.refund(failedId, new BigDecimal("147.00"), ResidualMode.CASH, null, null,
@@ -641,7 +641,7 @@ class RechargeFailureResolutionServiceTest {
     @Test
     @DisplayName("resolving an already-resolved failure is refused")
     void refundTwice() {
-        long failedId = settleThenFail("RJIO", "299.00", "key-refund-twice");
+        int failedId = settleThenFail("RJIO", "299.00", "key-refund-twice");
         resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH, null, null,
                 staffUserId);
 
@@ -664,7 +664,7 @@ class RechargeFailureResolutionServiceTest {
         // The relation is still assertable, with the outgoing side as its own
         // term — which is also a number the counter wants to see.
         LocalDate today = LocalDate.now(clock);
-        long failedId = settleThenFail("RJIO", "299.00", "key-till-refund");
+        int failedId = settleThenFail("RJIO", "299.00", "key-till-refund");
         settleThenComplete("BSNL", "147.00", "key-till-kept");
 
         resolution.refund(failedId, new BigDecimal("299.00"), ResidualMode.CASH, null, null,
@@ -710,17 +710,17 @@ class RechargeFailureResolutionServiceTest {
     // Fixtures
     // ------------------------------------------------------------------
 
-    private long settleThenFail(String operator, String amount, String key) {
+    private int settleThenFail(String operator, String amount, String key) {
         return settleThenFail(ServiceType.MOBILE, operator, "9000000002", amount, amount, key);
     }
 
-    private long settleThenFail(ServiceType type, String operator, String number,
+    private int settleThenFail(ServiceType type, String operator, String number,
                                 String amount, String paid, String key) {
         var settled = settlement.settle(
                 List.of(new RequestedRecharge(type, number, operator, new BigDecimal(amount),
                         null)),
                 List.of(cash(paid, paid)), staffUserId, key);
-        long id = settled.recharges().get(0).getRechargeId();
+        int id = settled.recharges().get(0).getRechargeId();
         fulfilment.markFailed(id, "operator declined", staffUserId);
         return id;
     }
@@ -735,23 +735,23 @@ class RechargeFailureResolutionServiceTest {
      * empty, because the credit book reads the {@code rc_credit_req} tally and
      * not the ledger.
      */
-    private long settleThenFailByUpi(String operator, String amount, String reference,
+    private int settleThenFailByUpi(String operator, String amount, String reference,
                                      String key) {
         var settled = settlement.settle(
                 List.of(mobile(operator, amount)),
                 List.of(new RequestedTender(SettlementMethod.UPI, new BigDecimal(amount),
                         null, reference, null, null)),
                 staffUserId, key);
-        long id = settled.recharges().get(0).getRechargeId();
+        int id = settled.recharges().get(0).getRechargeId();
         fulfilment.markFailed(id, "operator declined", staffUserId);
         return id;
     }
 
-    private long settleThenComplete(String operator, String amount, String key) {
+    private int settleThenComplete(String operator, String amount, String key) {
         var settled = settlement.settle(
                 List.of(mobile(operator, amount)), List.of(cash(amount, amount)),
                 staffUserId, key);
-        long id = settled.recharges().get(0).getRechargeId();
+        int id = settled.recharges().get(0).getRechargeId();
         fulfilment.markCompleted(id, "VND-1", null, staffUserId);
         return id;
     }
@@ -766,7 +766,7 @@ class RechargeFailureResolutionServiceTest {
                 new BigDecimal(tendered), null, null, null);
     }
 
-    private RcRecharge find(long rechargeId) {
+    private RcRecharge find(int rechargeId) {
         em.flush();
         em.clear();
         return em.find(RcRecharge.class, rechargeId);

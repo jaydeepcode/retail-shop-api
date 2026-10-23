@@ -47,10 +47,30 @@ import lombok.Setter;
 @Table(name = "rc_recharge")
 public class RcRecharge {
 
+    /**
+     * ⚠ {@code Integer}, NOT {@code Long}, because {@code V12:74} declares
+     * {@code RECHARGE_ID INT} and an entity must say what the schema says.
+     *
+     * <p>It was {@code Long} until 2026-10-22, and nothing caught it:
+     * {@code ddl-auto=validate} runs in the {@code local} profile ALONE — default,
+     * {@code container} and {@code prod} all use {@code none} — so the container
+     * tests and every deployed profile skipped the check. It surfaced the first
+     * time the application was started from an IDE against the developer restore,
+     * and it had made {@code validate} unusable: the one mechanism that would
+     * notice a renamed or missing column could not get past this.
+     *
+     * <p><b>The column is right and the field was wrong</b>, which is why this
+     * narrowed rather than V12 widening. {@code INT} tops out at 2,147,483,647
+     * against 73,469 payments taken since 2019 — roughly 12k a year. The ledger
+     * tables use {@code BIGINT} deliberately ({@code acc_voucher.VOUCHER_ID},
+     * V22:99) because a sale writes several voucher LINES, so they grow at a
+     * different rate. The distinction is intentional, not an oversight to
+     * normalise away.
+     */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "RECHARGE_ID")
-    private Long rechargeId;
+    private Integer rechargeId;
 
     /**
      * {@code MOBILE} or {@code TV}. The column is {@code RECHARGE_KIND} and the
@@ -135,7 +155,7 @@ public class RcRecharge {
      * controller.
      */
     @Column(name = "FAILED_RECHARGE_ID")
-    private Long failedRechargeId;
+    private Integer failedRechargeId;
 
     /** The operator or vendor reference; v2's aggregator transaction id. */
     @Column(name = "EXTERNAL_REF", length = 64)
