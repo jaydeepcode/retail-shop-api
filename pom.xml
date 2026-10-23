@@ -28,6 +28,9 @@
 		<url />
 	</scm>
 	<properties>
+		<!-- Set -DskipContainerTests=true to run without Docker ON PURPOSE. The
+		     point is that it has to be said out loud: see ContainerGateTest. -->
+		<skipContainerTests>false</skipContainerTests>
 		<java.version>21</java.version>
 		<!-- Pinned ABOVE the Boot 3.3.5 BOM's 1.19.8, which is the one place in
 		     this pom where overriding the BOM is correct rather than sloppy.
@@ -214,7 +217,33 @@
 						     executing. src/test/resources/testcontainers.properties
 						     carries the same value for Testcontainers' own use. -->
 						<api.version>1.44</api.version>
+						<!-- Surefire forks a JVM that does not inherit the outer -D
+						     flags, so the opt-out has to be passed through here for
+						     ContainerGateTest to see it. -->
+						<skipContainerTests>${skipContainerTests}</skipContainerTests>
 					</systemPropertyVariables>
+					<environmentVariables>
+						<!-- Ryuk, Testcontainers' cleanup sidecar, bind-mounts the
+						     Docker socket into itself. It resolves the HOST path to
+						     mount from this variable, which is read from the
+						     ENVIRONMENT only - docker.socket.override in
+						     testcontainers.properties is NOT consulted, which was
+						     tested rather than assumed.
+
+						     Under Colima the daemon lives at
+						     ~/.colima/default/docker.sock, Ryuk tries to mount that
+						     path from inside the VM where it does not exist, and
+						     the container dies with "operation not supported". Every
+						     @Testcontainers test then SKIPS and the build still
+						     reports BUILD SUCCESS - 140 of them, the same "gate that
+						     passes by not executing" as api.version above.
+
+						     /var/run/docker.sock is the path INSIDE the VM, which is
+						     also the real socket under Docker Desktop, so this is a
+						     no-op there rather than machine-specific. DOCKER_HOST is
+						     still the developer's own; see testcontainers.properties. -->
+						<TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>/var/run/docker.sock</TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>
+					</environmentVariables>
 				</configuration>
 			</plugin>
 		</plugins>
