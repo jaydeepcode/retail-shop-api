@@ -3,7 +3,7 @@ package com.mangle.retailshopapp.recharge.model.request;
 import java.math.BigDecimal;
 
 import com.mangle.retailshopapp.recharge.domain.ResidualMode;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;

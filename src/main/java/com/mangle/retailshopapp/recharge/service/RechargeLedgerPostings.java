@@ -22,7 +22,6 @@ import com.mangle.retailshopapp.accounting.repo.AccVoucherLineRepository;
 import com.mangle.retailshopapp.accounting.repo.AccVoucherRepository;
 import com.mangle.retailshopapp.recharge.domain.FloatConsumption;
 import com.mangle.retailshopapp.recharge.domain.ResidualMode;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
 import com.mangle.retailshopapp.recharge.exception.NoCommissionRateException;
@@ -31,6 +30,8 @@ import com.mangle.retailshopapp.recharge.model.RcOperator;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RefRechargeRoute;
 import com.mangle.retailshopapp.recharge.repo.AccCommissionRateRepository;
+import com.mangle.retailshopapp.settlement.SettlementLine;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 /**
  * The two-stage recharge posting (log §7.2, design-ledger.md §11.1).
@@ -146,7 +147,7 @@ public class RechargeLedgerPostings {
                                         LocalDateTime when) {
         List<VoucherLeg> legs = new ArrayList<>();
 
-        for (SettlementPlan.SettlementLine line : plan.settlementLines()) {
+        for (SettlementLine line : plan.settlementLines()) {
             // ⚠ lineType(), NOT name(). acc_voucher_line.PAYMENT_METHOD
             // foreign-keys ref_payment_line_type, whose three codes are CASH, UPI
             // and CRDT — the wire name is CREDIT and the column value is CRDT

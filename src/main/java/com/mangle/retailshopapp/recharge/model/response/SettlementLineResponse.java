@@ -2,7 +2,7 @@ package com.mangle.retailshopapp.recharge.model.response;
 
 import java.math.BigDecimal;
 
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 /**
  * One tender as the counter sees it (design-api.md §3.3).
