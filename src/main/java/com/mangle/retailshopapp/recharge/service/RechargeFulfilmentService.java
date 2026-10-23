@@ -89,7 +89,7 @@ public class RechargeFulfilmentService {
      *                  frequency in FY2026-27: two recharges, both on 2026-08-20
      */
     @Transactional
-    public RcRecharge markCompleted(long rechargeId, String vendorRef, String routeCode,
+    public RcRecharge markCompleted(int rechargeId, String vendorRef, String routeCode,
                                     Integer staffUserId) {
         RcRecharge recharge = lockOrThrow(rechargeId);
 
@@ -165,7 +165,7 @@ public class RechargeFulfilmentService {
      * what carries "we keyed it twice" now that the LABEL is gone.
      */
     @Transactional
-    public RcRecharge markFailed(long rechargeId, String reason, Integer staffUserId) {
+    public RcRecharge markFailed(int rechargeId, String reason, Integer staffUserId) {
         RcRecharge recharge = lockOrThrow(rechargeId);
 
         if (recharge.getStatusCode() == RechargeStatus.FAILED) {
@@ -218,7 +218,7 @@ public class RechargeFulfilmentService {
      * @throws IllegalStatusTransitionException 409 — not a failure at all
      */
     @Transactional
-    public RcRecharge resolveFailure(long rechargeId, RechargeStatus to, Integer staffUserId,
+    public RcRecharge resolveFailure(int rechargeId, RechargeStatus to, Integer staffUserId,
                                      String reason) {
         if (to != RechargeStatus.RETRIED && to != RechargeStatus.REFUNDED) {
             throw new IllegalArgumentException(
@@ -245,7 +245,7 @@ public class RechargeFulfilmentService {
      * check, and the second {@code UPDATE} wins silently. The lock is what makes
      * the check and the write one decision.
      */
-    private RcRecharge lockOrThrow(long rechargeId) {
+    private RcRecharge lockOrThrow(int rechargeId) {
         return recharges.findByIdForUpdate(rechargeId)
                 .orElseThrow(() -> new RechargeNotFound(rechargeId));
     }

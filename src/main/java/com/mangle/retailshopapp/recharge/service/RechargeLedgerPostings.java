@@ -425,7 +425,7 @@ public class RechargeLedgerPostings {
      *                  against the bank reads it
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public PostedVoucher postResidual(long failedRechargeId, BigDecimal amount, ResidualMode mode,
+    public PostedVoucher postResidual(int failedRechargeId, BigDecimal amount, ResidualMode mode,
                                       Integer customerId, Integer staffUserId, String narration,
                                       String reference, LocalDateTime when) {
         VoucherLeg credit = switch (mode) {
@@ -480,7 +480,7 @@ public class RechargeLedgerPostings {
      * customer topping up by UPI costs nothing extra to accept.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public PostedVoucher postTopUp(long failedRechargeId, BigDecimal amount,
+    public PostedVoucher postTopUp(int failedRechargeId, BigDecimal amount,
                                    SettlementMethod method, Integer customerId,
                                    Integer staffUserId, String narration, LocalDateTime when) {
         VoucherLeg debit = switch (method) {
@@ -516,12 +516,12 @@ public class RechargeLedgerPostings {
      * and only one of them has a retry. V29's unique key makes one failure
      * resolvable once, so this key is unique by the same guarantee.
      */
-    static String residualKey(long failedRechargeId) {
+    static String residualKey(int failedRechargeId) {
         return SOURCE_REFUND + ":rc_recharge#" + failedRechargeId + ":RESIDUAL";
     }
 
     /** {@code RECHARGE_SALE:rc_recharge#<id>:TOPUP}, keyed on the failed recharge. */
-    static String topUpKey(long failedRechargeId) {
+    static String topUpKey(int failedRechargeId) {
         return SOURCE_RECHARGE_SALE + ":rc_recharge#" + failedRechargeId + ":TOPUP";
     }
 
@@ -533,7 +533,7 @@ public class RechargeLedgerPostings {
      * reuses the same key; a correcting journal gets a different one, so both can
      * coexist."
      */
-    static String reversalKey(long rechargeId) {
+    static String reversalKey(int rechargeId) {
         return SOURCE_CORRECTION + ":rc_recharge#" + rechargeId + ":COMPLETION_REVERSED";
     }
 
@@ -580,7 +580,7 @@ public class RechargeLedgerPostings {
         return SOURCE_RECHARGE_SALE + ":rc_txn_header#" + paymentId + ":SETTLED";
     }
 
-    static String completionKey(long rechargeId) {
+    static String completionKey(int rechargeId) {
         return SOURCE_RECHARGE_SALE + ":rc_recharge#" + rechargeId + ":COMPLETED";
     }
 }

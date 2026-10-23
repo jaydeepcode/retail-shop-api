@@ -413,7 +413,7 @@ class RechargeHistoryServiceTest {
             // what records a sale that should never have been entered. The reason
             // carries the real explanation in place of the lost label.
             var settled = settle("ARTL", "199.00", "key-sum-7");
-            long rechargeId = settled.recharges().get(0).getRechargeId();
+            int rechargeId = settled.recharges().get(0).getRechargeId();
             fulfilment.markCompleted(rechargeId, null, null, staffUserId);
 
             assertEquals(new BigDecimal("199.00"),

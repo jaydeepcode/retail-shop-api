@@ -31,7 +31,7 @@ import com.mangle.retailshopapp.recharge.model.RefRechargeRoute;
  * a route in disguise.
  */
 public record RechargeResponse(
-        long rechargeId,
+        int rechargeId,
         String reference,
         ServiceType serviceType,
         String number,
@@ -45,7 +45,7 @@ public record RechargeResponse(
         RechargeStatus status,
         FailureResolution resolution,
         String vendorRef,
-        Long retryOfRechargeId,
+        Integer retryOfRechargeId,
         String failureReason,
         LocalDateTime rechargeAt,
         LocalDateTime statusChangedAt) {

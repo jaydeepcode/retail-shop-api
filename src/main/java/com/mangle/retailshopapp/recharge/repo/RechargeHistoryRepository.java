@@ -36,7 +36,7 @@ import com.mangle.retailshopapp.recharge.model.RcRecharge;
  * taken. That is correct, not a bug — but it needs an empty state that says so,
  * or it reads as broken.
  */
-public interface RechargeHistoryRepository extends Repository<RcRecharge, Long> {
+public interface RechargeHistoryRepository extends Repository<RcRecharge, Integer> {
 
     /**
      * History search (§7.1(a)).

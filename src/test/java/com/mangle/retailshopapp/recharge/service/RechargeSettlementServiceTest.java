@@ -361,7 +361,7 @@ class RechargeSettlementServiceTest {
                 List.of(tv("DISHTV", "240.00", null)),
                 List.of(cash("250.00", "250.00")),
                 staffUserId, "key-complete-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         RcRecharge completed = fulfilment.markCompleted(rechargeId, "VND-123", null, staffUserId);
 
@@ -432,7 +432,7 @@ class RechargeSettlementServiceTest {
                         new BigDecimal("200.00"), new BigDecimal("0.00"))),
                 List.of(cash("200.00", "200.00")),
                 staffUserId, "key-bigtv-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         RcRecharge completed = fulfilment.markCompleted(rechargeId, null, null, staffUserId);
         assertEquals(RechargeStatus.COMPLETED, completed.getStatusCode());
@@ -458,7 +458,7 @@ class RechargeSettlementServiceTest {
                         new BigDecimal("200.00"), new BigDecimal("10.00"))),
                 List.of(cash("210.00", "210.00")),
                 staffUserId, "key-bigtv-2");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
 
         String key = RechargeLedgerPostings.completionKey(rechargeId);
@@ -505,7 +505,7 @@ class RechargeSettlementServiceTest {
                 List.of(tv("DISHTV", "200.00", null)),
                 List.of(cash("210.00", "210.00")),
                 staffUserId, "key-revfail-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
         assertEquals("0.00", netOf("RCHG_PENDING", "CR_MINUS_DR"),
@@ -553,7 +553,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("ARTL", "199.00", null)),
                 List.of(cash("199.00", "199.00")),
                 staffUserId, "key-revvoid-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
         fulfilment.markFailed(rechargeId, "entered twice", staffUserId);
         fulfilment.markFailed(rechargeId, "entered twice", staffUserId);
@@ -596,7 +596,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("ARTL", "199.00", null)),
                 List.of(cash("199.00", "199.00")),
                 staffUserId, "key-retired-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         // Retire the operator between the sale and the completion.
         em.createNativeQuery("UPDATE rc_operator SET IS_ACTIVE = FALSE "
@@ -624,7 +624,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("ARTL", "199.00", null)),
                 List.of(cash("199.00", "199.00")),
                 staffUserId, "key-saravate-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         var ex = assertThrows(FloatAccountNotDerivableException.class,
                 () -> fulfilment.markCompleted(rechargeId, null, "SARAVATE", staffUserId));
@@ -647,7 +647,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("BSNL", "147.00", null)),
                 List.of(cash("147.00", "147.00")),
                 staffUserId, "key-bsnldirect-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         var ex = assertThrows(FloatAccountNotDerivableException.class,
                 () -> fulfilment.markCompleted(rechargeId, null, "DIRECT", staffUserId));
@@ -664,7 +664,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("ARTL", "299.00", null)),
                 List.of(cash("299.00", "300.00")),
                 staffUserId, "key-idem-complete");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
@@ -687,7 +687,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("RJIO", "299.00", null)),
                 List.of(cash("299.00", "299.00")),
                 staffUserId, "key-route-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         assertEquals("DIRECT", settled.recharges().get(0).getRouteCode());
 
@@ -708,7 +708,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("ARTL", "199.00", null)),
                 List.of(cash("199.00", "199.00")),
                 staffUserId, "key-illegal-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
 
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
         fulfilment.markFailed(rechargeId, "entered twice", staffUserId);
@@ -752,7 +752,7 @@ class RechargeSettlementServiceTest {
                 List.of(mobile("ARTL", "199.00", null)),
                 List.of(cash("199.00", "199.00")),
                 staffUserId, "key-void-1");
-        long rechargeId = settled.recharges().get(0).getRechargeId();
+        int rechargeId = settled.recharges().get(0).getRechargeId();
         fulfilment.markCompleted(rechargeId, null, null, staffUserId);
 
         fulfilment.markFailed(rechargeId, "   ", staffUserId);

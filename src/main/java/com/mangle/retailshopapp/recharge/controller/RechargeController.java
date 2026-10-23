@@ -358,7 +358,7 @@ public class RechargeController {
      * outcomes.
      */
     @PostMapping("/recharges/{rechargeId}/complete")
-    public RechargeResponse complete(@PathVariable long rechargeId,
+    public RechargeResponse complete(@PathVariable int rechargeId,
                                      @Valid @RequestBody(required = false)
                                      MarkCompleteRequest request,
                                      Principal principal) {
@@ -371,7 +371,7 @@ public class RechargeController {
 
     /** Mark failed (#10). Nothing posts; the money stays in {@code RCHG_PENDING}. */
     @PostMapping("/recharges/{rechargeId}/fail")
-    public RechargeResponse fail(@PathVariable long rechargeId,
+    public RechargeResponse fail(@PathVariable int rechargeId,
                                  @Valid @RequestBody(required = false) MarkFailedRequest request,
                                  Principal principal) {
         String reason = request == null ? null : request.reason();
@@ -460,7 +460,7 @@ public class RechargeController {
      */
     @PostMapping("/recharges/{rechargeId}/retry")
     public ResponseEntity<RetryRechargeResponse> retry(
-            @PathVariable long rechargeId,
+            @PathVariable int rechargeId,
             @Valid @RequestBody RetryRechargeRequest request,
             Principal principal) {
 
@@ -506,7 +506,7 @@ public class RechargeController {
      */
     @PostMapping("/recharges/{rechargeId}/refund")
     public ResponseEntity<RefundResponse> refund(
-            @PathVariable long rechargeId,
+            @PathVariable int rechargeId,
             @Valid @RequestBody RefundRechargeRequest request,
             Principal principal) {
 

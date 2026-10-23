@@ -30,7 +30,7 @@ import com.mangle.retailshopapp.recharge.model.RcRecharge;
  * and 89% of recharges having more than five minutes before the next. The
  * worklist is a leftover tray and is normally EMPTY.
  */
-public interface RechargeOpenItemsRepository extends Repository<RcRecharge, Long> {
+public interface RechargeOpenItemsRepository extends Repository<RcRecharge, Integer> {
 
     /**
      * The worklist: everything awaiting a recharge, optionally narrowed to one

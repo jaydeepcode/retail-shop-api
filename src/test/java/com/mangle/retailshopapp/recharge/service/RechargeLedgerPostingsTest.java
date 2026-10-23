@@ -264,7 +264,7 @@ class RechargeLedgerPostingsTest {
             assertEquals("RECHARGE_SALE:rc_txn_header#73482:SETTLED",
                     RechargeLedgerPostings.settlementKey(73482));
             assertEquals("RECHARGE_SALE:rc_recharge#99051:COMPLETED",
-                    RechargeLedgerPostings.completionKey(99051L));
+                    RechargeLedgerPostings.completionKey(99051));
         }
     }
 
@@ -536,7 +536,7 @@ class RechargeLedgerPostingsTest {
         return r;
     }
 
-    private static long NEXT_ID = 99_000L;
+    private static int NEXT_ID = 99_000;
 
     private int insertStaffUser() {
         em.createNativeQuery("INSERT INTO rc_user (USER_NAME, PASSWORD, ROLES, ACCOUNT_STATUS) "

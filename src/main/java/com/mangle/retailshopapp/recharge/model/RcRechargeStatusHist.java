@@ -39,13 +39,14 @@ import lombok.Setter;
 @Table(name = "rc_recharge_status_hist")
 public class RcRechargeStatusHist {
 
+    /** {@code Integer}: V12 declares {@code HIST_ID INT}. See {@link RcRecharge}. */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "HIST_ID")
-    private Long histId;
+    private Integer histId;
 
     @Column(name = "RECHARGE_ID", nullable = false)
-    private Long rechargeId;
+    private Integer rechargeId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "FROM_STATUS", length = 20)
@@ -64,7 +65,7 @@ public class RcRechargeStatusHist {
     @Column(name = "REASON", length = 255)
     private String reason;
 
-    public static RcRechargeStatusHist of(Long rechargeId, RechargeStatus from, RechargeStatus to,
+    public static RcRechargeStatusHist of(Integer rechargeId, RechargeStatus from, RechargeStatus to,
                                           Integer changedBy, String reason, LocalDateTime when) {
         RcRechargeStatusHist h = new RcRechargeStatusHist();
         h.rechargeId = rechargeId;

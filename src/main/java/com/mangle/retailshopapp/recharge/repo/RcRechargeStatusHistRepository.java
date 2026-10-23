@@ -12,7 +12,7 @@ import com.mangle.retailshopapp.recharge.model.RcRechargeStatusHist;
  * updates or deletes, and {@code RechargeFulfilmentService} is its only writer.
  */
 @Repository
-public interface RcRechargeStatusHistRepository extends JpaRepository<RcRechargeStatusHist, Long> {
+public interface RcRechargeStatusHistRepository extends JpaRepository<RcRechargeStatusHist, Integer> {
 
-    List<RcRechargeStatusHist> findByRechargeIdOrderByChangedAtAsc(Long rechargeId);
+    List<RcRechargeStatusHist> findByRechargeIdOrderByChangedAtAsc(Integer rechargeId);
 }
