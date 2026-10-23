@@ -3,7 +3,7 @@ package com.mangle.retailshopapp.recharge.model.response;
 import java.math.BigDecimal;
 
 import com.mangle.retailshopapp.recharge.domain.ResidualMode;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 /**
  * What a retry did (design-api.md §3.3's worked example).

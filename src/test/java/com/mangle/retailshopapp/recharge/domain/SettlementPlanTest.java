@@ -8,12 +8,13 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan.RechargeLine;
-import com.mangle.retailshopapp.recharge.domain.SettlementPlan.SettlementLine;
 import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
 import com.mangle.retailshopapp.recharge.exception.ErrorCode;
 import com.mangle.retailshopapp.recharge.exception.InvalidTenderException;
 import com.mangle.retailshopapp.recharge.exception.LinesDoNotSumException;
 import com.mangle.retailshopapp.recharge.exception.TooManyCreditLinesException;
+import com.mangle.retailshopapp.settlement.SettlementLine;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;

@@ -21,12 +21,12 @@ import com.mangle.retailshopapp.accounting.LedgerPostingService;
 import com.mangle.retailshopapp.config.ClockConfig;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ServiceType;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
 import com.mangle.retailshopapp.recharge.exception.LinesDoNotSumException;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedTender;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 import jakarta.persistence.EntityManager;
 

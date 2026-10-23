@@ -28,10 +28,8 @@ import com.mangle.retailshopapp.accounting.PostedVoucher;
 import com.mangle.retailshopapp.recharge.domain.FloatConsumption;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ServiceType;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
-import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan.RechargeLine;
-import com.mangle.retailshopapp.recharge.domain.SettlementPlan.SettlementLine;
+import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
 import com.mangle.retailshopapp.recharge.exception.NoCommissionRateException;
 import com.mangle.retailshopapp.recharge.model.RcOperator;
@@ -39,6 +37,8 @@ import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RefRechargeRoute;
 import com.mangle.retailshopapp.recharge.repo.RcOperatorRepository;
 import com.mangle.retailshopapp.recharge.repo.RefRechargeRouteRepository;
+import com.mangle.retailshopapp.settlement.SettlementLine;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 import jakarta.persistence.EntityManager;
 
