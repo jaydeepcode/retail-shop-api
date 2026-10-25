@@ -17,7 +17,6 @@ import com.mangle.retailshopapp.credit.repo.RcTxnHeaderRepository;
 import com.mangle.retailshopapp.recharge.domain.Outstanding;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ServiceType;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.model.RcIdempotency;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
@@ -27,6 +26,8 @@ import com.mangle.retailshopapp.recharge.repo.RcDishtvDtlsRepository;
 import com.mangle.retailshopapp.recharge.repo.RcIdempotencyRepository;
 import com.mangle.retailshopapp.recharge.repo.RcRechargeRepository;
 import com.mangle.retailshopapp.recharge.repo.RcTxnPaymentRepository;
+import com.mangle.retailshopapp.settlement.SettlementLine;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 /**
  * The one atomic write (design-api.md §4.3, §5.1).
@@ -147,8 +148,8 @@ public class RechargeSettlementService {
                     r.amount(), surcharge));
         }
 
-        List<SettlementPlan.SettlementLine> tenderLines = tenders.stream()
-                .map(t -> new SettlementPlan.SettlementLine(t.method(), t.amount(),
+        List<SettlementLine> tenderLines = tenders.stream()
+                .map(t -> new SettlementLine(t.method(), t.amount(),
                         t.amountTendered(), t.reference(), t.customerId(), t.note()))
                 .toList();
 
@@ -231,7 +232,7 @@ public class RechargeSettlementService {
         }
 
         short seqNo = 1;
-        for (SettlementPlan.SettlementLine line : plan.settlementLines()) {
+        for (SettlementLine line : plan.settlementLines()) {
             RcTxnPayment tender = new RcTxnPayment();
             tender.setId(new RcTxnPaymentId(paymentId, seqNo++));
             tender.setLineType(line.method().lineType());

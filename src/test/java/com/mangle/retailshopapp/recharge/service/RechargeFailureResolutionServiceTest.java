@@ -27,7 +27,6 @@ import com.mangle.retailshopapp.accounting.LedgerPostingService;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ResidualMode;
 import com.mangle.retailshopapp.recharge.domain.ServiceType;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.exception.FailureAlreadyResolvedException;
 import com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionException;
 import com.mangle.retailshopapp.recharge.exception.InvalidTenderException;
@@ -38,6 +37,7 @@ import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeFailureResolutionService.Settlement;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedTender;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 import jakarta.persistence.EntityManager;
 

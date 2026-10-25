@@ -1,4 +1,4 @@
-package com.mangle.retailshopapp.recharge.domain;
+package com.mangle.retailshopapp.settlement;
 
 /**
  * How a basket was paid for — {@code ref_payment_line_type}'s three codes.

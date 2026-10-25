@@ -19,7 +19,6 @@ import com.mangle.retailshopapp.recharge.domain.Outstanding;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ResidualMode;
 import com.mangle.retailshopapp.recharge.domain.RetryPlan;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
 import com.mangle.retailshopapp.recharge.exception.FailureAlreadyResolvedException;
 import com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionException;
@@ -33,6 +32,7 @@ import com.mangle.retailshopapp.recharge.model.RcTxnPayment;
 import com.mangle.retailshopapp.recharge.model.RcTxnPaymentId;
 import com.mangle.retailshopapp.recharge.repo.RcRechargeRepository;
 import com.mangle.retailshopapp.recharge.repo.RcTxnPaymentRepository;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 /**
  * Resolving a failure: the retry and the refund (design-api.md §3.2 #12 and

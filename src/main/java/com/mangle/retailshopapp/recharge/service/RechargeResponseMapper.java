@@ -16,21 +16,22 @@ import com.mangle.retailshopapp.customer.model.CustomerDetails;
 import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
 import com.mangle.retailshopapp.recharge.domain.FinancialYear;
 import com.mangle.retailshopapp.recharge.domain.Outstanding;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.domain.SettlementPlan;
 import com.mangle.retailshopapp.recharge.model.RcOperator;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RcTxnPayment;
 import com.mangle.retailshopapp.recharge.model.RefRechargeRoute;
 import com.mangle.retailshopapp.recharge.model.response.CreditSummaryResponse;
-import com.mangle.retailshopapp.recharge.model.response.RefundResponse;
-import com.mangle.retailshopapp.recharge.model.response.RetryRechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.RechargeWorkItemResponse;
+import com.mangle.retailshopapp.recharge.model.response.RefundResponse;
+import com.mangle.retailshopapp.recharge.model.response.RetryRechargeResponse;
 import com.mangle.retailshopapp.recharge.model.response.SettlementLineResponse;
 import com.mangle.retailshopapp.recharge.model.response.TransactionResponse;
 import com.mangle.retailshopapp.recharge.repo.RcOperatorRepository;
 import com.mangle.retailshopapp.recharge.repo.RefRechargeRouteRepository;
+import com.mangle.retailshopapp.settlement.SettlementLine;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 import com.mangle.retailshopapp.user.model.User;
 import com.mangle.retailshopapp.user.repo.UserRepository;
 
@@ -284,7 +285,7 @@ public class RechargeResponseMapper {
 
         List<SettlementLineResponse> lines = new ArrayList<>(plan.settlementLines().size());
         int lineId = 1;
-        for (SettlementPlan.SettlementLine line : plan.settlementLines()) {
+        for (SettlementLine line : plan.settlementLines()) {
             boolean isCash = line.method().carriesTender();
             lines.add(new SettlementLineResponse(
                     lineId++,

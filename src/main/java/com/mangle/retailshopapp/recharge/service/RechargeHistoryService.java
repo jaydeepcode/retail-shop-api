@@ -17,7 +17,6 @@ import com.mangle.retailshopapp.credit.model.RcTxnHeader;
 import com.mangle.retailshopapp.credit.repo.RcTxnHeaderRepository;
 import com.mangle.retailshopapp.recharge.domain.FinancialYear;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
-import com.mangle.retailshopapp.recharge.domain.SettlementMethod;
 import com.mangle.retailshopapp.recharge.exception.PaymentNotFound;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RcTxnPayment;
@@ -26,6 +25,7 @@ import com.mangle.retailshopapp.recharge.repo.RcRechargeRepository;
 import com.mangle.retailshopapp.recharge.repo.RcTxnPaymentRepository;
 import com.mangle.retailshopapp.recharge.repo.RechargeHistoryRepository;
 import com.mangle.retailshopapp.recharge.repo.RechargeOpenItemsRepository;
+import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 /**
  * History, the day summary, and reading one visit back (design-api.md §5.1).
