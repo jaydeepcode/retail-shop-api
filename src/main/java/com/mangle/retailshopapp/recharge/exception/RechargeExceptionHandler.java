@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.mangle.retailshopapp.recharge.controller.RechargeController;
+import com.mangle.retailshopapp.ticket.controller.TicketController;
 import com.mangle.retailshopapp.recharge.model.response.ErrorResponse;
 import com.mangle.retailshopapp.recharge.model.response.ErrorResponse.FieldError;
 
@@ -37,19 +38,38 @@ import jakarta.validation.ConstraintViolationException;
  * {@code ex.getMessage()} to the client, leaking whatever the exception happened
  * to say.
  *
- * <p>Scoped to this controller with {@code assignableTypes} rather than applied
+ * <p>Scoped to named controllers with {@code assignableTypes} rather than applied
  * globally. A global advice here would change the error shape of every existing
  * endpoint in the application, which is not S3's to do: the other modules have
  * their own conventions, including the {@code Map.of("success", …)} bodies §8.4
  * criticises, and changing them is a separate piece of work with its own
  * client-side consequences.
  *
+ * <p>⚠ EVERY CONTROLLER SHARING THIS ERROR MODEL MUST BE NAMED ABOVE, and
+ * forgetting one is silent. {@code TicketController} was added for S4: its 422s
+ * are the same {@code ErrorCode} vocabulary and the same
+ * {@code RechargeException} tree, but until it appeared in that list NOTHING
+ * handled them. A ticket booking refused by {@code ck_tkt_funding} would have
+ * fallen through to Spring's default error body — a bare 500 with no
+ * {@code code} — which passes every service unit test and fails the first time
+ * anyone uses the screen. {@code TicketControllerErrorsTest} is the guard: it
+ * asserts a ticket 422 arrives as a 422 carrying its code.
+ *
+ * <p>The class name is now wider than its package. {@code recharge.exception} is
+ * where the shared vocabulary lives — next-session-s4.md requires reusing
+ * {@code ErrorCode} and this hierarchy "rather than starting a second one",
+ * because §8.4's "these names are a contract" holds across the whole surface —
+ * and it equally says to "rename the package if {@code recharge.exception} reads
+ * wrong for a shared thing, but say so in the diff". It does read wrong. 41
+ * files import it, so the rename is its own commit rather than buried in a
+ * feature.
+ *
  * <p><b>The 500 handler is the one that matters most.</b> It returns a fixed
  * message and a generated {@code traceId}, and logs the stack trace at ERROR
  * against that id. The client learns nothing about the internals and support can
  * still find the exact failure.
  */
-@RestControllerAdvice(assignableTypes = RechargeController.class)
+@RestControllerAdvice(assignableTypes = {RechargeController.class, TicketController.class})
 public class RechargeExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RechargeExceptionHandler.class);

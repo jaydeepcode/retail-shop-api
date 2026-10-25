@@ -74,7 +74,10 @@ class TicketLedgerPostingsTest {
         registry.add("spring.flyway.enabled", () -> "true");
         registry.add("spring.flyway.baseline-on-migrate", () -> "true");
         registry.add("spring.flyway.baseline-version", () -> "8");
-        registry.add("spring.flyway.target", () -> "32");
+        // 33, matching spring.flyway.target. ⚠ Pinned per test, so a new
+        // migration that the entity depends on breaks every test still pinned
+        // below it — which is how V33 was caught here rather than in production.
+        registry.add("spring.flyway.target", () -> "33");
         registry.add("spring.flyway.out-of-order", () -> "false");
     }
 

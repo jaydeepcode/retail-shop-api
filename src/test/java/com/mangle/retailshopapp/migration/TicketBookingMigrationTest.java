@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the baseline carries and an empty database does not.
  */
 @Testcontainers(disabledWithoutDocker = true)
-@DisplayName("V31-V32 applied to a production-shaped database")
+@DisplayName("V31-V33 applied to a production-shaped database")
 class TicketBookingMigrationTest {
 
     @Container
@@ -61,20 +61,21 @@ class TicketBookingMigrationTest {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion("8")
-                // 32, matching spring.flyway.target. The cap moved 30 -> 32 for
-                // this slice's two files and no further: V13-V19 are still
-                // excluded and still do not exist as files.
-                .target(org.flywaydb.core.api.MigrationVersion.fromVersion("32"))
+                // 33, matching spring.flyway.target. The cap moved 30 -> 33
+                // across this slice: 31 and 32 as planned, then 33 for the
+                // booking's idempotency key with the owner's decision. V13-V19
+                // are still excluded and still do not exist as files.
+                .target(org.flywaydb.core.api.MigrationVersion.fromVersion("33"))
                 .outOfOrder(false)
                 .load()
                 .migrate();
     }
 
     @Test
-    @DisplayName("V31 and V32 follow V30, and nothing from the cutover set appears")
+    @DisplayName("V31-V33 follow V30, and nothing from the cutover set appears")
     void appliedVersions() {
         assertEquals(List.of("9", "10", "11", "12", "20", "21", "22", "23", "24",
-                        "25", "26", "27", "28", "29", "30", "31", "32"),
+                        "25", "26", "27", "28", "29", "30", "31", "32", "33"),
                 strings("SELECT version FROM flyway_schema_history "
                         + "WHERE success = 1 AND type = 'SQL' ORDER BY installed_rank"),
                 "V13-V19 must never appear here");
@@ -303,6 +304,63 @@ class TicketBookingMigrationTest {
                     "the column exists, so the query is meaningful");
             assertEquals(0L, count("SELECT COUNT(*) FROM tkt_booking WHERE NOTE IS NULL"),
                     "nothing was backfilled into the new table");
+        }
+
+        @Test
+        @DisplayName("⚠ V33's unique key is what makes insert-then-recover work")
+        void idempotencyKeyIsUnique() {
+            // The column alone would store the key and prevent nothing. The
+            // UNIQUE index is the mechanism: the SECOND insert is refused by the
+            // database, which is what a SELECT-then-insert pre-check cannot do
+            // without a race.
+            assertEquals(List.of("uk_tkt_idem"),
+                    strings("SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS "
+                            + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tkt_booking' "
+                            + "AND INDEX_NAME = 'uk_tkt_idem' AND NON_UNIQUE = 0"));
+
+            assertEquals(List.of("YES"),
+                    strings("SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS "
+                            + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tkt_booking' "
+                            + "AND COLUMN_NAME = 'IDEMPOTENCY_KEY'"),
+                    "nullable, because a booking written by any other path has no client key");
+        }
+
+        @Test
+        @DisplayName("⚠ the unique key BITES on the second identical key")
+        void duplicateKeyIsRefused() {
+            exec("""
+                 INSERT INTO tkt_booking
+                     (BOOKING_DTTM, BOOKING_MODE, PASSENGER_COUNT, COMMISSION_AMOUNT,
+                      IDEMPOTENCY_KEY, NOTE)
+                 VALUES ('2026-10-25 14:00:00', 'RAIL', 1, 60.00, 'dup-probe', 'first')
+                 """);
+            assertRefused("""
+                          INSERT INTO tkt_booking
+                              (BOOKING_DTTM, BOOKING_MODE, PASSENGER_COUNT, COMMISSION_AMOUNT,
+                               IDEMPOTENCY_KEY, NOTE)
+                          VALUES ('2026-10-25 14:01:00', 'RAIL', 1, 60.00, 'dup-probe', 'second')
+                          """, "uk_tkt_idem");
+        }
+
+        @Test
+        @DisplayName("but any number of bookings with NO key coexist")
+        void nullKeysCoexist() {
+            // MySQL's unique index ignores NULLs, which is the wanted behaviour
+            // rather than a loophole: uniqueness is a claim about keys that were
+            // supplied, not about bookings.
+            exec("""
+                 INSERT INTO tkt_booking
+                     (BOOKING_DTTM, BOOKING_MODE, PASSENGER_COUNT, COMMISSION_AMOUNT, NOTE)
+                 VALUES ('2026-10-25 14:10:00', 'RAIL', 1, 60.00, 'no key 1')
+                 """);
+            exec("""
+                 INSERT INTO tkt_booking
+                     (BOOKING_DTTM, BOOKING_MODE, PASSENGER_COUNT, COMMISSION_AMOUNT, NOTE)
+                 VALUES ('2026-10-25 14:11:00', 'RAIL', 1, 60.00, 'no key 2')
+                 """);
+            assertEquals(List.of("2"),
+                    strings("SELECT COUNT(*) FROM tkt_booking "
+                            + "WHERE NOTE IN ('no key 1', 'no key 2')"));
         }
 
         @Test

@@ -108,6 +108,22 @@ public class TktBooking {
     @Column(name = "NOTE", length = 255)
     private String note;
 
+    /**
+     * The client's {@code Idempotency-Key} (V33), unique where present.
+     *
+     * <p>⚠ This column is what makes a retry after a lost response safe, and the
+     * UNIQUE index is what does the work: the recovery is insert-then-recover,
+     * because a {@code SELECT} before inserting is a race between two requests
+     * that both read "not present" before either writes.
+     *
+     * <p>Nullable, because a booking written by any path other than endpoint #1
+     * has no client key and must not invent one. MySQL's unique index ignores
+     * NULLs, which is the wanted behaviour: uniqueness is a claim about keys that
+     * were supplied.
+     */
+    @Column(name = "IDEMPOTENCY_KEY", length = 80)
+    private String idempotencyKey;
+
     @Column(name = "CRE_BY")
     private Integer creBy;
 
