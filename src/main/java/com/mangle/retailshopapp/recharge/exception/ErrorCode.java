@@ -21,6 +21,7 @@ public enum ErrorCode {
     CUSTOMER_NOT_FOUND,
     UNKNOWN_OPERATOR,
     UNKNOWN_ROUTE,
+    BOOKING_NOT_FOUND,
 
     // 409
     ILLEGAL_STATUS_TRANSITION,
@@ -40,6 +41,15 @@ public enum ErrorCode {
     TOO_MANY_CREDIT_LINES,
     NO_COMMISSION_RATE,
     FLOAT_ACCOUNT_NOT_DERIVABLE,
+
+    // 422 - ticket booking (design-ticket-booking.md §4). Added to THIS enum
+    // rather than a second one: §8.4's "these names are a contract" holds across
+    // the whole surface, and a counter deciding where to put the cursor cannot do
+    // it from two vocabularies.
+    TICKET_FUNDING_MISMATCH,
+    UNKNOWN_FUNDING_ACCOUNT,
+    INVALID_PASSENGER_COUNT,
+    INVALID_COMMISSION,
 
     // 500
     INTERNAL_ERROR
