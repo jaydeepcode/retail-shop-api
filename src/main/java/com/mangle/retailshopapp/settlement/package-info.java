@@ -29,15 +29,16 @@
  * matrix — sums, short tender, credit without a customer — must stay runnable
  * with no database and no context.
  *
- * <p>⚠ ONE DEPENDENCY POINTS THE WRONG WAY, deliberately and temporarily. The
- * 422s thrown here still live in {@code recharge.exception}, because
- * next-session-s4.md is explicit that S4 must "reuse {@code ErrorCode} and the
+ * <p>⚠ THE DEPENDENCY THAT POINTED THE WRONG WAY NOW POINTS AT A SHARED
+ * PACKAGE. The 422s thrown here come from one vocabulary, because S4 was
+ * explicit that it must "reuse {@code ErrorCode} and the
  * {@code RechargeException} hierarchy rather than starting a second one" —
  * §8.4's "these names are a contract" holds across the whole surface, and a
  * counter deciding where to put the cursor cannot do it from two vocabularies.
- * The brief equally says to "rename the package if {@code recharge.exception}
- * reads wrong for a shared thing — but say so in the diff". It does read wrong,
- * and 41 files import it, so the rename is its own commit alongside the ticket
- * endpoints rather than smuggled into this refactor.
+ * What was wrong was its address: S4 left it in {@code recharge.exception} and
+ * said so in the diff, since a 41-file rename inside a feature commit makes the
+ * feature unreviewable. S5 performed it as its own commit — the tree is now
+ * {@code com.mangle.retailshopapp.apierror} (next-session-s5.md item 2), which
+ * is where a shared wire-error vocabulary belongs.
  */
 package com.mangle.retailshopapp.settlement;

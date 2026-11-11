@@ -1,4 +1,4 @@
-package com.mangle.retailshopapp.recharge.service;
+package com.mangle.retailshopapp.settings;
 
 import java.math.BigDecimal;
 import java.util.List;

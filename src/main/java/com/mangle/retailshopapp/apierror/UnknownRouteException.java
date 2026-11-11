@@ -1,4 +1,4 @@
-package com.mangle.retailshopapp.recharge.exception;
+package com.mangle.retailshopapp.apierror;
 
 /** 404 — no live route with that code. */
 public class UnknownRouteException extends RechargeNotFoundException {

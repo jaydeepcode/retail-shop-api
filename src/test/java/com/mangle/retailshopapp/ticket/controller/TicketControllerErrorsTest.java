@@ -137,7 +137,7 @@ class TicketControllerErrorsTest {
         // with the same code recharge uses, which is §8.4's whole point: a
         // counter deciding where to put the cursor cannot do it from two
         // vocabularies.
-        postBooking(new com.mangle.retailshopapp.recharge.exception.LinesDoNotSumException(
+        postBooking(new com.mangle.retailshopapp.apierror.LinesDoNotSumException(
                 new BigDecimal("485.00"), new BigDecimal("400.00")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("LINES_DO_NOT_SUM"))
@@ -149,7 +149,7 @@ class TicketControllerErrorsTest {
     @WithMockUser(username = "staff", authorities = {"ROLE_USER"})
     @DisplayName("a credit line with no customer is the one hard credit rule")
     void creditRequiresCustomer() throws Exception {
-        postBooking(new com.mangle.retailshopapp.recharge.exception
+        postBooking(new com.mangle.retailshopapp.apierror
                 .CreditRequiresCustomerException())
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("CREDIT_REQUIRES_CUSTOMER"));

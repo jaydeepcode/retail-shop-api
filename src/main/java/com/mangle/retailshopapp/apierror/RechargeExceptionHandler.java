@@ -1,4 +1,4 @@
-package com.mangle.retailshopapp.recharge.exception;
+package com.mangle.retailshopapp.apierror;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -55,14 +55,21 @@ import jakarta.validation.ConstraintViolationException;
  * anyone uses the screen. {@code TicketControllerErrorsTest} is the guard: it
  * asserts a ticket 422 arrives as a 422 carrying its code.
  *
- * <p>The class name is now wider than its package. {@code recharge.exception} is
- * where the shared vocabulary lives — next-session-s4.md requires reusing
- * {@code ErrorCode} and this hierarchy "rather than starting a second one",
- * because §8.4's "these names are a contract" holds across the whole surface —
- * and it equally says to "rename the package if {@code recharge.exception} reads
- * wrong for a shared thing, but say so in the diff". It does read wrong. 41
- * files import it, so the rename is its own commit rather than buried in a
- * feature.
+ * <p>The class name is wider than its package was, which is why the package
+ * moved. {@code recharge.exception} held the shared vocabulary — S4 required
+ * reusing {@code ErrorCode} and this hierarchy "rather than starting a second
+ * one", because §8.4's "these names are a contract" holds across the whole
+ * surface — and with {@code ticket} and now the ledger throwing from the same
+ * tree, "recharge" as its home read as misleading rather than merely odd.
+ * next-session-s5.md item 2 settles it: {@code com.mangle.retailshopapp.apierror},
+ * S5's own first commit, nothing else in it. It is a pure rename —
+ * {@code @ExceptionHandler} binds by {@code Class} object through an import and
+ * {@code ErrorCode} is an enum whose {@code name()} is the wire value, so no
+ * response body changes by a byte.
+ *
+ * <p>The class keeps its name. It is scoped by {@code assignableTypes} to the
+ * recharge and ticket controllers (not global, see above), so the name still
+ * says what it handles; renaming it is not what item 2 settled.
  *
  * <p><b>The 500 handler is the one that matters most.</b> It returns a fixed
  * message and a generated {@code traceId}, and logs the stack trace at ERROR

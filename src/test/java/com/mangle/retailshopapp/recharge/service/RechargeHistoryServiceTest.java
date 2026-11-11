@@ -20,12 +20,13 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.mangle.retailshopapp.accounting.LedgerPostingService;
+import com.mangle.retailshopapp.apierror.PaymentNotFound;
 import com.mangle.retailshopapp.config.ClockConfig;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ServiceType;
-import com.mangle.retailshopapp.recharge.exception.PaymentNotFound;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedTender;
+import com.mangle.retailshopapp.settings.SettingService;
 import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 import jakarta.persistence.EntityManager;
@@ -498,7 +499,7 @@ class RechargeHistoryServiceTest {
         @DisplayName("a malformed year is a 400, not a silent default to this year")
         void malformedYear() {
             var ex = assertThrows(
-                    com.mangle.retailshopapp.recharge.exception.RechargeBadRequestException.class,
+                    com.mangle.retailshopapp.apierror.RechargeBadRequestException.class,
                     () -> history.search("2026-28", null, null, null, null, null, null,
                             PageRequest.of(0, 20)));
             assertEquals(400, ex.status());

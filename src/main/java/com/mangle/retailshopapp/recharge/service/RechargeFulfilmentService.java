@@ -7,11 +7,11 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.mangle.retailshopapp.apierror.FailureAlreadyResolvedException;
+import com.mangle.retailshopapp.apierror.IllegalStatusTransitionException;
+import com.mangle.retailshopapp.apierror.RechargeNotFound;
 import com.mangle.retailshopapp.recharge.domain.FailureResolution;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
-import com.mangle.retailshopapp.recharge.exception.FailureAlreadyResolvedException;
-import com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionException;
-import com.mangle.retailshopapp.recharge.exception.RechargeNotFound;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.model.RcRechargeStatusHist;
 import com.mangle.retailshopapp.recharge.repo.RcRechargeRepository;

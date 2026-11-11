@@ -3,8 +3,8 @@ package com.mangle.retailshopapp.ticket.exception;
 import java.util.List;
 import java.util.Map;
 
-import com.mangle.retailshopapp.recharge.exception.ErrorCode;
-import com.mangle.retailshopapp.recharge.exception.RechargeRuleViolationException;
+import com.mangle.retailshopapp.apierror.ErrorCode;
+import com.mangle.retailshopapp.apierror.RechargeRuleViolationException;
 
 /**
  * 422 — the funding account is not one of the four, or is not active.

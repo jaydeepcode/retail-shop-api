@@ -2,8 +2,8 @@ package com.mangle.retailshopapp.ticket.exception;
 
 import java.util.Map;
 
-import com.mangle.retailshopapp.recharge.exception.ErrorCode;
-import com.mangle.retailshopapp.recharge.exception.RechargeRuleViolationException;
+import com.mangle.retailshopapp.apierror.ErrorCode;
+import com.mangle.retailshopapp.apierror.RechargeRuleViolationException;
 
 /**
  * 422 — a fare with no funding account, or a funding account with no fare.

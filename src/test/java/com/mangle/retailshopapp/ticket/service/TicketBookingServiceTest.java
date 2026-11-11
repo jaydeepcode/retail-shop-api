@@ -23,8 +23,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.mangle.retailshopapp.accounting.LedgerPostingService;
-import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
-import com.mangle.retailshopapp.recharge.exception.LinesDoNotSumException;
+import com.mangle.retailshopapp.apierror.CreditRequiresCustomerException;
+import com.mangle.retailshopapp.apierror.LinesDoNotSumException;
 import com.mangle.retailshopapp.settlement.SettlementLine;
 import com.mangle.retailshopapp.settlement.SettlementMethod;
 import com.mangle.retailshopapp.ticket.domain.BookingMode;
