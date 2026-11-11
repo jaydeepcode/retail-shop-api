@@ -3,8 +3,8 @@ package com.mangle.retailshopapp.ticket.exception;
 import java.math.BigDecimal;
 import java.util.Map;
 
-import com.mangle.retailshopapp.recharge.exception.ErrorCode;
-import com.mangle.retailshopapp.recharge.exception.RechargeRuleViolationException;
+import com.mangle.retailshopapp.apierror.ErrorCode;
+import com.mangle.retailshopapp.apierror.RechargeRuleViolationException;
 
 /**
  * 422 — the booking's own figures are impossible.

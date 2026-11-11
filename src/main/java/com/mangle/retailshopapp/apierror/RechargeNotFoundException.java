@@ -1,4 +1,4 @@
-package com.mangle.retailshopapp.recharge.exception;
+package com.mangle.retailshopapp.apierror;
 
 /** 404 — something the request named does not exist. */
 public class RechargeNotFoundException extends RechargeException {

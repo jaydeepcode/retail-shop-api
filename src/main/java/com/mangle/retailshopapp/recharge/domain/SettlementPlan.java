@@ -3,10 +3,10 @@ package com.mangle.retailshopapp.recharge.domain;
 import java.math.BigDecimal;
 import java.util.List;
 
-import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
-import com.mangle.retailshopapp.recharge.exception.InvalidTenderException;
-import com.mangle.retailshopapp.recharge.exception.LinesDoNotSumException;
-import com.mangle.retailshopapp.recharge.exception.TooManyCreditLinesException;
+import com.mangle.retailshopapp.apierror.CreditRequiresCustomerException;
+import com.mangle.retailshopapp.apierror.InvalidTenderException;
+import com.mangle.retailshopapp.apierror.LinesDoNotSumException;
+import com.mangle.retailshopapp.apierror.TooManyCreditLinesException;
 import com.mangle.retailshopapp.settlement.Amounts;
 import com.mangle.retailshopapp.settlement.SettlementLine;
 import com.mangle.retailshopapp.settlement.TenderPlan;

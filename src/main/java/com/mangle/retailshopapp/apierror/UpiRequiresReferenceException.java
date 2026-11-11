@@ -1,4 +1,4 @@
-package com.mangle.retailshopapp.recharge.exception;
+package com.mangle.retailshopapp.apierror;
 
 /**
  * 422 — a UPI refund with no transaction reference in the note.

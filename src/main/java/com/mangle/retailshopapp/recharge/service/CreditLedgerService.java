@@ -9,13 +9,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.mangle.retailshopapp.apierror.CreditRequiresCustomerException;
+import com.mangle.retailshopapp.apierror.CustomerNotFound;
+import com.mangle.retailshopapp.apierror.InvalidTenderException;
 import com.mangle.retailshopapp.credit.model.RcCreditReq;
 import com.mangle.retailshopapp.credit.repo.RcCreditReqRepository;
 import com.mangle.retailshopapp.recharge.domain.Outstanding;
-import com.mangle.retailshopapp.recharge.exception.CreditRequiresCustomerException;
-import com.mangle.retailshopapp.recharge.exception.CustomerNotFound;
-import com.mangle.retailshopapp.recharge.exception.InvalidTenderException;
 import com.mangle.retailshopapp.recharge.repo.CreditBookRepository;
+import com.mangle.retailshopapp.settings.SettingService;
 
 /**
  * The append-only credit tally (design-api.md §5.1).

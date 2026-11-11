@@ -1,4 +1,4 @@
-package com.mangle.retailshopapp.recharge.exception;
+package com.mangle.retailshopapp.apierror;
 
 /**
  * The stable machine-readable error codes (design-api.md §8.4).
@@ -50,6 +50,17 @@ public enum ErrorCode {
     UNKNOWN_FUNDING_ACCOUNT,
     INVALID_PASSENGER_COUNT,
     INVALID_COMMISSION,
+
+    // 422 - the ledger's posting rules (next-session-s5.md item 5). Two codes,
+    // not one per refusal and not twenty: LEDGER_POSTING_REFUSED carries every
+    // malformed or unbalanced draft, where the sentence is the whole of what a
+    // client can act on, while VOUCHER_LOCKED_BY_RECONCILIATION is the one
+    // refusal with a DIFFERENT next action — the day is sealed, so the route is
+    // a correcting JOURNAL rather than a delete-and-repost (FRD 8.3), and
+    // ticket-corrections.md has the ticket module choosing between exactly
+    // those two mechanisms.
+    LEDGER_POSTING_REFUSED,
+    VOUCHER_LOCKED_BY_RECONCILIATION,
 
     // 500
     INTERNAL_ERROR

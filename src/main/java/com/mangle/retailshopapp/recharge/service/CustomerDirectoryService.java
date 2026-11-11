@@ -6,9 +6,10 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.mangle.retailshopapp.apierror.CustomerNotFound;
 import com.mangle.retailshopapp.customer.model.CustomerDetails;
 import com.mangle.retailshopapp.customer.repo.CustomerDetailsRepository;
-import com.mangle.retailshopapp.recharge.exception.CustomerNotFound;
+import com.mangle.retailshopapp.settings.SettingService;
 
 /**
  * The customer identity boundary for the counter (design-api.md §5.1).

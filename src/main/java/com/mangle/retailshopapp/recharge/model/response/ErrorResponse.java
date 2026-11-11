@@ -3,7 +3,7 @@ package com.mangle.retailshopapp.recharge.model.response;
 import java.util.List;
 import java.util.Map;
 
-import com.mangle.retailshopapp.recharge.exception.ErrorCode;
+import com.mangle.retailshopapp.apierror.ErrorCode;
 
 /**
  * One shape for every error (design-api.md §8.4).

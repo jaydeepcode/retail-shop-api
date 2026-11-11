@@ -101,17 +101,33 @@ CREATE TABLE IF NOT EXISTS wt_purchase_details (
     KEY idx_trip_status (STATUS_CODE)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- ⚠ performed_for_water_party_id ADDED 2026-11-11. It was the one place this
+-- file did not keep its own "column for column" promise above, and it was what
+-- stopped a ddl-auto=validate boot after V7's three tables were fixed:
+-- "Schema-validation: missing column [performed_for_water_party_id]".
+--
+-- next-session-s5.md item 1 settled this the other way round — delete the field
+-- as dead, "its only reference in the repo", 0 of 7,819 production rows
+-- populated. The first half of that is wrong and the correction is written into
+-- the brief: AuditLogService.logPumpAction:25 SETS it, from a targetPartyId that
+-- MotorController:156-162 has just validated as an approved party, on both the
+-- mock and the real ESP path. The column is written by live code; it is null in
+-- production because no caller has yet passed a party, not because nothing
+-- writes it. Production HAS the column as int NULL, so the fixture was short
+-- and the schema was not — the same diagnosis as V7's three tables, with the
+-- same fix and no migration. Decided with the owner 2026-11-11.
 CREATE TABLE IF NOT EXISTS wt_adt_lgs (
-    id                   BIGINT       NOT NULL AUTO_INCREMENT,
-    user_id              INT          NOT NULL,
-    action_type          VARCHAR(50)  NOT NULL,
-    action_description   VARCHAR(500) NULL,
-    target_entity        VARCHAR(50)  NULL,
-    target_id            INT          NULL,
-    performed_by         INT          NOT NULL,
-    ip_address           VARCHAR(45)  NULL,
-    timestamp            DATETIME     NOT NULL,
-    is_chargeable_action TINYINT(1)   NOT NULL DEFAULT 1,
+    id                           BIGINT       NOT NULL AUTO_INCREMENT,
+    user_id                      INT          NOT NULL,
+    action_type                  VARCHAR(50)  NOT NULL,
+    action_description           VARCHAR(500) NULL,
+    target_entity                VARCHAR(50)  NULL,
+    target_id                    INT          NULL,
+    performed_by                 INT          NOT NULL,
+    performed_for_water_party_id INT          NULL,
+    ip_address                   VARCHAR(45)  NULL,
+    timestamp                    DATETIME     NOT NULL,
+    is_chargeable_action         TINYINT(1)   NOT NULL DEFAULT 1,
     PRIMARY KEY (id),
     KEY idx_audit_time (timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

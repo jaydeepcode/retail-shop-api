@@ -18,14 +18,15 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.mangle.retailshopapp.accounting.LedgerPostingService;
+import com.mangle.retailshopapp.apierror.FloatAccountNotDerivableException;
+import com.mangle.retailshopapp.apierror.LinesDoNotSumException;
 import com.mangle.retailshopapp.config.ClockConfig;
 import com.mangle.retailshopapp.recharge.domain.RechargeStatus;
 import com.mangle.retailshopapp.recharge.domain.ServiceType;
-import com.mangle.retailshopapp.recharge.exception.FloatAccountNotDerivableException;
-import com.mangle.retailshopapp.recharge.exception.LinesDoNotSumException;
 import com.mangle.retailshopapp.recharge.model.RcRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedRecharge;
 import com.mangle.retailshopapp.recharge.service.RechargeSettlementService.RequestedTender;
+import com.mangle.retailshopapp.settings.SettingService;
 import com.mangle.retailshopapp.settlement.SettlementMethod;
 
 import jakarta.persistence.EntityManager;
@@ -720,7 +721,7 @@ class RechargeSettlementServiceTest {
         // from this service alone: ALLOWED[FAILED] is {RETRIED, REFUNDED}, so
         // re-completing a failure is refused. Nothing un-fails a recharge.
         var ex = assertThrows(
-                com.mangle.retailshopapp.recharge.exception.IllegalStatusTransitionException.class,
+                com.mangle.retailshopapp.apierror.IllegalStatusTransitionException.class,
                 () -> fulfilment.markCompleted(rechargeId, "VND-9", null, staffUserId));
         assertEquals(409, ex.status());
         assertEquals(vouchersBefore, count("SELECT COUNT(*) FROM acc_voucher"),

@@ -18,11 +18,19 @@
 --
 -- SCOPE: this is a minimal faithful fixture, not a full schema copy. It carries
 -- the eight tables V9-V12 reference and, of those, the columns, types,
--- collations and keys the migrations depend on. Every value below was read from
--- INFORMATION_SCHEMA on the read-only restore on 2026-10-08 — in particular the
--- utf8mb3 collations, which are the whole point of V9's conversion step, and
--- the mediumint keys, which §4.4 names as the most likely cause of a failed
--- first attempt.
+-- collations and keys the migrations depend on. Every value in that part was
+-- read from INFORMATION_SCHEMA on the read-only restore on 2026-10-08 — in
+-- particular the utf8mb3 collations, which are the whole point of V9's
+-- conversion step, and the mediumint keys, which §4.4 names as the most likely
+-- cause of a failed first attempt.
+--
+-- ⚠ SCOPE WIDENED 2026-11-11, and the word "pre-Flyway" above is now one table
+-- group too narrow. It also carries V7's THREE FLOW-RATE TABLES, which a
+-- migration does create — but one BELOW baseline-version=8, so Flyway never
+-- runs it and a container built from this file did not have them. That is what
+-- stopped a ddl-auto=validate boot (next-session-s5.md item 1). Their own
+-- block near the end of this file says where the DDL came from and what it
+-- deliberately leaves out.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -147,6 +155,94 @@ CREATE TABLE rc_dishtv_dtls (
     NAME        VARCHAR(45) NULL,
     PRIMARY KEY (DISHTV_NO)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+
+-- ----------------------------------------------------------------------------
+-- V7's three tables. ⚠ ADDED 2026-11-11, AND THEY ARE NOT PRE-FLYWAY.
+-- ----------------------------------------------------------------------------
+-- These three are created by V7__Flow_rate_and_auto_stop.sql, so a reader is
+-- entitled to ask what they are doing in a "pre-Flyway" fixture. The answer is
+-- baseline-version=8: V7 is BELOW the baseline, so Flyway never runs it, and a
+-- container built from this file has no pump_flow_rate_* or
+-- trip_flow_rate_anomalies tables at all — while water/model/FlowRateConfig,
+-- FlowRateCache and TripFlowRateAnomaly map them. Booting that database with
+-- ddl-auto=validate stops dead on "Schema-validation: missing table
+-- [pump_flow_rate_cache]", before anything this project is building is reached.
+--
+-- ⚠ THE SCHEMA IS NOT SHORT OF ANYTHING — THIS FIXTURE WAS. All three exist in
+-- production (confirmed read-only against the restore on 2026-11-02 for
+-- next-session-s5.md item 1), which is why the fix is DDL here and NOT a
+-- migration: a migration would try to create tables production already has, and
+-- the Flyway cap is a deliberate act rather than a side effect of a fixture gap
+-- (local-dev/OWNER-GATE.md).
+--
+-- S4 got its validate boot by creating these three by hand on the throwaway.
+-- That boot was real and the database was not reproducible, which is the thing
+-- this block fixes: the next person to run start.sh from scratch gets the same
+-- database S4 was looking at.
+--
+-- SOURCE: V7 itself, column for column, which is the definition production's
+-- own tables were created from. ⚠ Unlike the eight tables above, this block was
+-- NOT re-read from INFORMATION_SCHEMA this session — the read-only MCP onto the
+-- restore was not attached. The entities are what makes that safe to live with:
+-- all three map exactly the columns V7 declares and no others, and validate
+-- checks that every MAPPED column exists, not that every column is mapped. Any
+-- later drift in production shows up as a validate failure here, which is the
+-- behaviour wanted.
+--
+-- ⚠ ONE DELIBERATE OMISSION: trip_flow_rate_anomalies' FOREIGN KEY onto
+-- wt_purchase_details(ID). That table is not in this fixture — its own SCOPE
+-- note above carries the eight tables V9-V12 reference — and local-dev mounts
+-- this file as 01-baseline, BEFORE 01-pre-flyway-remainder.sql creates
+-- wt_purchase_details, so the constraint could not resolve either way. It is
+-- not needed for what this fixture is for: validate reads tables and columns,
+-- never foreign keys. Production keeps the FK.
+-- ----------------------------------------------------------------------------
+CREATE TABLE pump_flow_rate_config (
+    id                    INT          NOT NULL AUTO_INCREMENT,
+    pump_type             VARCHAR(20)  NOT NULL COMMENT 'INSIDE, OUTSIDE, or BOTH',
+    default_sec_per_liter DECIMAL(5,3) NOT NULL COMMENT 'Time per liter in seconds',
+    customer_id           INT          NULL COMMENT 'NULL=global default, INT=customer-specific override',
+    effective_from        DATETIME     NOT NULL COMMENT 'Config active date + historical data cutoff',
+    is_active             BOOLEAN      NOT NULL DEFAULT TRUE,
+    notes                 VARCHAR(255) NULL,
+    created_by            INT          NULL,
+    created_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at            DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_pump_customer_active (pump_type, customer_id, is_active),
+    KEY idx_effective_from (effective_from),
+    KEY idx_active_pump (is_active, pump_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Configurable flow rate defaults';
+
+CREATE TABLE pump_flow_rate_cache (
+    customer_id              INT          NOT NULL,
+    pump_type                VARCHAR(20)  NOT NULL,
+    calculated_sec_per_liter DECIMAL(5,3) NOT NULL,
+    sample_count             INT          NOT NULL COMMENT 'Number of trips used in calculation',
+    last_calculated          DATETIME     NOT NULL,
+    calculation_source       VARCHAR(50)  NOT NULL COMMENT 'CUSTOMER_HISTORY, GLOBAL_AVG, or CONFIG_DEFAULT',
+    PRIMARY KEY (customer_id, pump_type),
+    KEY idx_last_calculated (last_calculated),
+    KEY idx_source (calculation_source)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Cached flow rate calculations';
+
+CREATE TABLE trip_flow_rate_anomalies (
+    id                     INT          NOT NULL AUTO_INCREMENT,
+    trip_id                INT          NOT NULL,
+    customer_id            INT          NOT NULL,
+    measured_sec_per_liter DECIMAL(5,3) NOT NULL,
+    expected_sec_per_liter DECIMAL(5,3) NOT NULL,
+    deviation_percent      DECIMAL(5,2) NOT NULL,
+    reason                 VARCHAR(50)  NOT NULL COMMENT 'TOO_FAST, TOO_SLOW, DURATION_ZERO',
+    flagged_at             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reviewed_by            INT          NULL,
+    review_notes           VARCHAR(255) NULL,
+    resolution             VARCHAR(50)  NULL COMMENT 'VALID, INVALID, CAPACITY_ERROR, etc',
+    PRIMARY KEY (id),
+    KEY idx_customer_flagged (customer_id, flagged_at),
+    KEY idx_unreviewed (reviewed_by, flagged_at),
+    KEY idx_trip (trip_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Outlier detection log';
 
 -- ----------------------------------------------------------------------------
 -- Reference codes, not business data. These 18 rows are what V10 seeds

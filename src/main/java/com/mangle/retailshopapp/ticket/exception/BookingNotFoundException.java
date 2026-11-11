@@ -2,8 +2,8 @@ package com.mangle.retailshopapp.ticket.exception;
 
 import java.util.Map;
 
-import com.mangle.retailshopapp.recharge.exception.ErrorCode;
-import com.mangle.retailshopapp.recharge.exception.RechargeException;
+import com.mangle.retailshopapp.apierror.ErrorCode;
+import com.mangle.retailshopapp.apierror.RechargeException;
 
 /** 404 — no booking with that id. */
 public class BookingNotFoundException extends RechargeException {
