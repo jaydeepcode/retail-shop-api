@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.mangle.retailshopapp.accounting.model.AccVoucher;
 import com.mangle.retailshopapp.accounting.repo.AccVoucherRepository;
+import com.mangle.retailshopapp.apierror.ErrorCode;
 
 import jakarta.persistence.EntityManager;
 
@@ -87,6 +88,7 @@ public class LedgerCorrectionRules {
 
         if (!locked.isEmpty()) {
             throw new LedgerPostingException(
+                    ErrorCode.VOUCHER_LOCKED_BY_RECONCILIATION,
                     "cannot delete voucher " + voucherId + ": " + String.join(", ", locked)
                             + " already reconciled on or after " + voucher.getVoucherDate()
                             + ". Post a correcting JOURNAL instead (FRD 8.3).");
