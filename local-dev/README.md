@@ -56,7 +56,7 @@ apart from a real one.
 
 So the `container` profile exists: a throwaway MySQL on **port 3307** —
 deliberately not 3306, so a mistyped profile connects to nothing rather than to
-the wrong database — with Flyway capped at 28.
+the wrong database — with Flyway capped at 34.
 
 **There is a worse version of this still waiting, and it is not fixed.** Nothing
 caps Flyway in the application config; only the tests and the `container` profile
