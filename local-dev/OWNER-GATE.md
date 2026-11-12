@@ -52,9 +52,10 @@ mvn flyway:repair      # see src/main/resources/db/migration/README.md
 
 ### 3. Apply the counter's migrations
 
-Start the backend once against the target database. Flyway applies **V9–V12 and V20–V29**,
-capped at 29 — `spring.flyway.target=29` in `application.properties`, inherited by both the
-`local` and `prod` profiles.
+Start the backend once against the target database. Flyway applies **V9–V12 and V20–V34**,
+capped at 34 — `spring.flyway.target=34` in `application.properties`, inherited by both the
+`local` and `prod` profiles. (It read 29 until 2026-11-12; the cap has moved with V30, V31–V33
+and now V34, each time as its own recorded decision.)
 
 > ⚠ **V9 takes an exclusive lock on four live tables** while InnoDB rebuilds them
 > (`ALGORITHM=COPY`, ~13 MB, measured at 0.34 s on 2026-10-08). The legacy writer is *blocked*,
