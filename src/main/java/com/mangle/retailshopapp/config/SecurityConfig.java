@@ -104,6 +104,29 @@ public class SecurityConfig {
                                 .hasAnyAuthority(SecurityConstants.ADMIN_USER,
                                                  SecurityConstants.NORMAL_USER)
 
+                        // ⚠ EXPLICITLY GATED IN THE SAME RELEASE THAT INTRODUCES
+                        // THEM, which design-ledger-api.md §3 requires in as many
+                        // words: these endpoints "move money between accounts and
+                        // close the books", and the fall-through below would let a
+                        // water ROLE_CUSTOMER token reach them, since no
+                        // ROLE_STAFF exists.
+                        //
+                        // The two authorities are the recharge counter's, not a
+                        // new role. §3's "one ROLE_STAFF is enough" is about the
+                        // default being DENY rather than about designing a role
+                        // hierarchy — "the point is that the default must be deny,
+                        // not that the role hierarchy needs designing" — and
+                        // introducing a third authority would touch every token
+                        // issued, which is S0b's work and not this slice's.
+                        //
+                        // /vouchers/** and /reports/** need the same line when
+                        // their controllers arrive; they are not added here
+                        // because a matcher for a path nothing serves reads as
+                        // though it had been reviewed.
+                        .requestMatchers("/accounts/**")
+                                .hasAnyAuthority(SecurityConstants.ADMIN_USER,
+                                                 SecurityConstants.NORMAL_USER)
+
                         // ⚠ STILL OUTSTANDING, and S3 does not close it: 23 of the
                         // endpoints below fall through to authenticated-only, which
                         // is S0b's deny-by-default work (implementation-plan.md
