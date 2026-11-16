@@ -3,6 +3,7 @@ package com.mangle.retailshopapp.accounting.controller;
 import java.net.URI;
 import java.security.Principal;
 import java.time.LocalDate;
+import java.util.List;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -14,24 +15,40 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.mangle.retailshopapp.accounting.AccountDirectoryService;
 import com.mangle.retailshopapp.accounting.LedgerCloseService;
+import com.mangle.retailshopapp.accounting.UpiSettlementService;
 import com.mangle.retailshopapp.accounting.model.request.PoolCloseRequest;
 import com.mangle.retailshopapp.accounting.model.request.ReconciliationRequest;
+import com.mangle.retailshopapp.accounting.model.request.UpiSettlementRequest;
+import com.mangle.retailshopapp.accounting.model.response.AccountResponse;
 import com.mangle.retailshopapp.accounting.model.response.ClosePreviewResponse;
 import com.mangle.retailshopapp.accounting.model.response.PoolCloseResponse;
 import com.mangle.retailshopapp.accounting.model.response.ReconciliationResponse;
+import com.mangle.retailshopapp.accounting.model.response.UpiPendingResponse;
+import com.mangle.retailshopapp.accounting.model.response.UpiSettlementResponse;
 import com.mangle.retailshopapp.user.model.User;
 import com.mangle.retailshopapp.user.repo.UserRepository;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 /**
  * Endpoints 1 to 4 of design-ledger-api.md §1.1 — the writes the FRD §8.3
- * correction regime depends on.
+ * correction regime depends on — plus the picker list (#12) and the UPI
+ * settlement pair (#5, #6) from §1.2 and §1.3.
+ *
+ * <p>⚠ The three later endpoints live here rather than on a controller of their
+ * own because they are {@code /accounts/*} paths and Spring maps a path prefix
+ * once: a second {@code @RequestMapping("/accounts")} controller would work but
+ * would leave a reader guessing which of the two serves a given path. The close
+ * is still what this class is mostly about.
  *
  * <p>Naming follows design-api.md §1.1, so these are {@code /accounts/*} beside
  * {@code /recharge/*} and {@code /tickets/*}, and the package mirrors
@@ -62,11 +79,125 @@ import jakarta.validation.Valid;
 public class AccountsController {
 
     private final LedgerCloseService closeService;
+    private final AccountDirectoryService directory;
+    private final UpiSettlementService upiSettlements;
     private final UserRepository users;
 
-    public AccountsController(LedgerCloseService closeService, UserRepository users) {
+    public AccountsController(LedgerCloseService closeService,
+                              AccountDirectoryService directory,
+                              UpiSettlementService upiSettlements,
+                              UserRepository users) {
         this.closeService = closeService;
+        this.directory = directory;
+        this.upiSettlements = upiSettlements;
         this.users = users;
+    }
+
+    // ------------------------------------------------------------------
+    // #12 — the picker list
+    // ------------------------------------------------------------------
+
+    /**
+     * Active accounts with type, business, pool and the {@code ALLOW_MANUAL} flag
+     * (endpoint 12).
+     *
+     * <p>⚠ <b>{@code manualOnly=true} IS WHAT A VOUCHER SCREEN ASKS FOR</b>, and
+     * it exists so a screen does not have to know A7's list. The machine-owned
+     * accounts — {@code UPI_CLEARING}, {@code RCHG_PENDING}, the four floats and
+     * the two cash-variance accounts — are moved only by the endpoints that own
+     * them, so a picker that offered them would be collecting 422s. The flag is
+     * also on every row, so a screen that wants to show them greyed out with a
+     * reason can.
+     *
+     * <p>⚠ NO {@code Page}, unlike endpoint 3. The chart of accounts is ~30 rows
+     * that never change identity (L1) and a picker needs all of them to render; a
+     * paged picker would make the screen ask twice for a list that fits in one
+     * response.
+     *
+     * <p>An unknown {@code type} or {@code business} returns an empty list rather
+     * than a 400 — see {@link AccountDirectoryService#directory}.
+     */
+    @GetMapping
+    public List<AccountResponse> accounts(
+            @RequestParam(defaultValue = "false") boolean manualOnly,
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false) String business) {
+
+        return directory.directory(manualOnly, type, business);
+    }
+
+    // ------------------------------------------------------------------
+    // #5 — what is still in transit
+    // ------------------------------------------------------------------
+
+    /**
+     * UPI still in transit, grouped by collection date and aged (endpoint 5).
+     *
+     * <p>⚠ A LITERAL PATH SEGMENT BESIDE {@code /accounts/{accountCode}/…}, and
+     * Spring prefers the literal — so {@code /accounts/upi-clearing/pending} does
+     * not collide with the close history. Lower-case and hyphenated because it is
+     * a RESOURCE here rather than an account code: the code is
+     * {@code UPI_CLEARING}, and endpoint 4 still closes it under that name.
+     *
+     * @param asOf the ageing date; today when omitted
+     */
+    @GetMapping("/upi-clearing/pending")
+    public UpiPendingResponse upiPending(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate asOf) {
+
+        return upiSettlements.pending(asOf);
+    }
+
+    // ------------------------------------------------------------------
+    // #6 — recording what the bank credited
+    // ------------------------------------------------------------------
+
+    /**
+     * Records what the bank actually credited (endpoint 6, A4).
+     *
+     * <p>⚠ <b>AN {@code Idempotency-Key} HEADER, CLIENT-GENERATED</b> — and that
+     * is a correction to §1.3's table, taken with the owner on 2026-11-16. §1.3
+     * had the key server-derived as
+     * {@code UPI_SETTLEMENT:<collectionDate>:<n>} AND stored on
+     * {@code uk_vch_idem}, which cannot detect a retry: the server would derive
+     * {@code n + 1} and record the ₹3,200 twice. The sequence is still derived and
+     * still published, on {@code SOURCE_REF}; the header is what makes a second
+     * click harmless. See {@code UpiSettlementService}.
+     *
+     * <p>⚠ <b>MORE THAN ONE SETTLEMENT PER COLLECTION DATE IS NORMAL</b> (A4,
+     * E16b), which is why this does not refuse a date that already has one. It
+     * refuses only an amount larger than what is still pending.
+     */
+    @PostMapping("/upi-clearing/settlements")
+    public ResponseEntity<UpiSettlementResponse> settleUpi(
+            @RequestHeader("Idempotency-Key") @NotBlank(
+                    message = "an Idempotency-Key header is required: a settlement may be "
+                            + "recorded more than once for one collection date, so only the "
+                            + "client can tell a retry from a second real credit")
+            @Size(max = 80, message = "an Idempotency-Key is at most 80 characters")
+            String idempotencyKey,
+            @Valid @RequestBody UpiSettlementRequest request,
+            Principal principal) {
+
+        try {
+            UpiSettlementResponse settled =
+                    upiSettlements.settle(request, idempotencyKey, staffIdOf(principal));
+            return settled.replayed()
+                    ? ResponseEntity.status(HttpStatus.CONFLICT).body(settled)
+                    : ResponseEntity
+                            .created(URI.create("/vouchers/" + settled.voucherId()))
+                            .body(settled);
+
+        } catch (DataIntegrityViolationException e) {
+            // Two concurrent FIRST settlements: one lost either uk_vch_idem or
+            // uk_recon_account_date, and its transaction has rolled back, so the
+            // winner is only visible from a fresh one. An ordinary retry never
+            // reaches here — the service looks the key up before it writes.
+            return upiSettlements.replayed(idempotencyKey)
+                    .map(original -> ResponseEntity.status(HttpStatus.CONFLICT).body(original))
+                    .orElseThrow(() -> e);
+        }
     }
 
     // ------------------------------------------------------------------

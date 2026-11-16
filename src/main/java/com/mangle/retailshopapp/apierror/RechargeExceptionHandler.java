@@ -22,8 +22,10 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.mangle.retailshopapp.accounting.controller.AccountsController;
+import com.mangle.retailshopapp.accounting.controller.VoucherController;
 import com.mangle.retailshopapp.recharge.controller.RechargeController;
 import com.mangle.retailshopapp.ticket.controller.TicketController;
+import com.mangle.retailshopapp.settings.ConfigController;
 import com.mangle.retailshopapp.recharge.model.response.ErrorResponse;
 import com.mangle.retailshopapp.recharge.model.response.ErrorResponse.FieldError;
 
@@ -57,7 +59,17 @@ import jakarta.validation.ConstraintViolationException;
  * asserts a ticket 422 arrives as a 422 carrying its code.
  *
  * <p>{@code AccountsController} was added for S5 and needed the same amendment,
- * with {@code AccountsControllerErrorsTest} as its guard. ⚠ Note that this is a
+ * with {@code AccountsControllerErrorsTest} as its guard.
+ * {@code VoucherController} and {@code ConfigController} followed, with
+ * {@code VoucherControllerErrorsTest} as theirs — <b>and the two were added for
+ * different reasons, which is worth saying because only one of them throws.</b>
+ * {@code VoucherController} is where a person composes a draft, so it is the
+ * controller the ~20 {@code LedgerPostingException} refusals actually reach.
+ * {@code ConfigController} throws nothing today; it is named so that its 4xx
+ * shapes — a validation failure, a missing handler — match every other endpoint
+ * a screen calls, rather than being Spring's default body on the one call every
+ * screen makes first. A controller added later and forgotten is the failure
+ * below; a controller added early and quiet is not a failure at all. ⚠ Note that this is a
  * SEPARATE failure from the one {@code LedgerPostingException} describes, and
  * the two look identical on the wire: there, the advice WAS reached and no
  * handler matched the type; here, the advice is never reached at all. Fixing
@@ -85,7 +97,8 @@ import jakarta.validation.ConstraintViolationException;
  * still find the exact failure.
  */
 @RestControllerAdvice(assignableTypes = {RechargeController.class, TicketController.class,
-                                         AccountsController.class})
+                                         AccountsController.class, VoucherController.class,
+                                         ConfigController.class})
 public class RechargeExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RechargeExceptionHandler.class);
