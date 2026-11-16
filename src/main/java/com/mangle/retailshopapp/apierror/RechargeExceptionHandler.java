@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import com.mangle.retailshopapp.accounting.controller.AccountsController;
 import com.mangle.retailshopapp.recharge.controller.RechargeController;
 import com.mangle.retailshopapp.ticket.controller.TicketController;
 import com.mangle.retailshopapp.recharge.model.response.ErrorResponse;
@@ -55,6 +56,13 @@ import jakarta.validation.ConstraintViolationException;
  * anyone uses the screen. {@code TicketControllerErrorsTest} is the guard: it
  * asserts a ticket 422 arrives as a 422 carrying its code.
  *
+ * <p>{@code AccountsController} was added for S5 and needed the same amendment,
+ * with {@code AccountsControllerErrorsTest} as its guard. ⚠ Note that this is a
+ * SEPARATE failure from the one {@code LedgerPostingException} describes, and
+ * the two look identical on the wire: there, the advice WAS reached and no
+ * handler matched the type; here, the advice is never reached at all. Fixing
+ * either one does nothing for the other (next-session-s5.md items 4 and 5).
+ *
  * <p>The class name is wider than its package was, which is why the package
  * moved. {@code recharge.exception} held the shared vocabulary — S4 required
  * reusing {@code ErrorCode} and this hierarchy "rather than starting a second
@@ -76,7 +84,8 @@ import jakarta.validation.ConstraintViolationException;
  * against that id. The client learns nothing about the internals and support can
  * still find the exact failure.
  */
-@RestControllerAdvice(assignableTypes = {RechargeController.class, TicketController.class})
+@RestControllerAdvice(assignableTypes = {RechargeController.class, TicketController.class,
+                                         AccountsController.class})
 public class RechargeExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RechargeExceptionHandler.class);
