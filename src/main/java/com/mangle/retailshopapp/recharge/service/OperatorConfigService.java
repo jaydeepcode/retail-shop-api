@@ -186,11 +186,19 @@ public class OperatorConfigService {
                         new BigDecimal("0.00"));
     }
 
-    /** Below this, change is not displayed at the counter (log §14.5). */
+    /**
+     * Below this, change is not displayed at the counter (log §14.5).
+     *
+     * <p>⚠ DELEGATES RATHER THAN CARRYING ITS OWN {@code 5.00}, since
+     * {@code GET /config} now reads the same figure for the ticket and close
+     * screens (next-session-s5.md item 3). Two accessors with two fallbacks could
+     * answer differently to two screens from the same missing row. The method
+     * stays on this service because {@code /recharge/config} is assembled here
+     * and the counter should not need two injections for one response.
+     */
     @Transactional(readOnly = true)
     public BigDecimal changeDisplayThreshold() {
-        return settings.getDecimal(SettingService.CHANGE_DISPLAY_THRESHOLD,
-                new BigDecimal("5.00"));
+        return settings.changeDisplayThreshold();
     }
 
     /** The 30-day credit-ageing threshold. */

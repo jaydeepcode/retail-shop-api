@@ -52,6 +52,27 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests((authorizeRequests) -> authorizeRequests
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                        // ⚠ ABOVE THE "/*" LINE BELOW, AND IT HAS TO BE. That
+                        // line permits the SPA shell, and Ant's /* matches
+                        // exactly ONE path segment — so /config falls inside it.
+                        // Matchers are evaluated in order, so placed after it
+                        // this rule would never be reached and GET /config would
+                        // be readable with no token at all. Moving it back down
+                        // is what ConfigControllerTest.unauthenticatedIsRefused
+                        // was watched to fail against.
+                        //
+                        // Same two authorities as /recharge/** and /accounts/**:
+                        // the owner and staff, never a water ROLE_CUSTOMER.
+                        // Nothing on /config is secret — a change threshold, an
+                        // IMPS fee and the financial year — but §3's point is
+                        // that the default must be DENY, and bank.default.account
+                        // is kept off the response for the separate reason that
+                        // a client must not be able to send it back (log §9.3).
+                        .requestMatchers("/config")
+                                .hasAnyAuthority(SecurityConstants.ADMIN_USER,
+                                                 SecurityConstants.NORMAL_USER)
+
                         .requestMatchers("/*", "/index.html", "/static/**", "/assets/**").permitAll()
                         // Public endpoints - specific paths first
                         .requestMatchers("/authenticate", "/refresh-token").permitAll()

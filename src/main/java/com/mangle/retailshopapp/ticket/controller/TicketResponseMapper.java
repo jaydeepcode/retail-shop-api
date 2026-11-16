@@ -18,23 +18,10 @@ import com.mangle.retailshopapp.ticket.model.response.SettlementLineResponse;
  * clients cannot disagree about it.
  *
  * <p>A separate class rather than more methods on the controller, so the
- * threshold is passed in one place when the screen starts reading it from config
- * rather than from this constant.
+ * threshold is passed in one place now that the screen reads it from config
+ * rather than from a constant here.
  */
 final class TicketResponseMapper {
-
-    /**
-     * §14.5's threshold.
-     *
-     * <p>⚠ A CONSTANT HERE AND A SETTING FOR RECHARGE, which is a difference
-     * worth naming rather than hiding: the recharge counter reads
-     * {@code changeDisplayThreshold} from {@code rc_setting} through its config
-     * endpoint, and the ticket screen has no config endpoint yet. The figure is
-     * the same ₹5 and the rule is the same rule. Wiring this to the same setting
-     * is a small, obvious follow-up; inventing a second ticket-specific setting
-     * would not be.
-     */
-    private static final BigDecimal CHANGE_DISPLAY_THRESHOLD = new BigDecimal("5.00");
 
     private TicketResponseMapper() {
     }
@@ -75,8 +62,22 @@ final class TicketResponseMapper {
                 .toList();
     }
 
-    static List<SettlementLineResponse> lines(TenderPlan tender) {
-        boolean displayed = tender.changeIsDisplayed(CHANGE_DISPLAY_THRESHOLD);
+    /**
+     * ⚠ THE THRESHOLD IS PASSED IN, AND IS NO LONGER A CONSTANT HERE
+     * (next-session-s5.md item 3). It read {@code new BigDecimal("5.00")} with a
+     * comment admitting the figure was "the same ₹5 and the same rule" as the
+     * recharge counter's setting, and that the only reason for the literal was
+     * that the ticket screen had no config endpoint to read it from. It has one
+     * now — {@code GET /config} — and the class comment above already said the
+     * threshold would be "passed in one place" when it arrived, which is this
+     * parameter.
+     *
+     * @param changeDisplayThreshold from {@code SettingService.changeDisplayThreshold()},
+     *                               i.e. {@code rc_setting['change.display.threshold']}
+     */
+    static List<SettlementLineResponse> lines(TenderPlan tender,
+                                              BigDecimal changeDisplayThreshold) {
+        boolean displayed = tender.changeIsDisplayed(changeDisplayThreshold);
         return tender.lines().stream()
                 .map(line -> toLine(line, tender, displayed))
                 .toList();
