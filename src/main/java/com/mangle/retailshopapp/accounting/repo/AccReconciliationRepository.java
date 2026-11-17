@@ -36,6 +36,21 @@ public interface AccReconciliationRepository extends JpaRepository<AccReconcilia
     Page<AccReconciliation> findByAccountCodeOrderByReconDateDesc(String accountCode,
                                                                   Pageable pageable);
 
+    /**
+     * Every close on file for one account up to a date, oldest first — endpoint
+     * 5's settled-per-collection-date figures.
+     *
+     * <p>⚠ For {@code UPI_CLEARING} a row's {@code RECON_DATE} is the COLLECTION
+     * date and its {@code COUNTED_AMOUNT} is what the bank has credited against
+     * that date so far, which is not quite what the column means for a cash
+     * drawer: there {@code COUNTED_AMOUNT} is a one-time physical count. V22's
+     * own header says this table "covers all three reconciliation points with one
+     * table", and the UPI reading is the one where a row ACCUMULATES, because A4
+     * allows a date to settle in instalments.
+     */
+    List<AccReconciliation> findByAccountCodeAndReconDateLessThanEqualOrderByReconDate(
+            String accountCode, LocalDate asOf);
+
     /** Endpoint 3 with {@code ?from=&to=}, both inclusive. */
     Page<AccReconciliation> findByAccountCodeAndReconDateBetweenOrderByReconDateDesc(
             String accountCode, LocalDate fromInclusive, LocalDate toInclusive, Pageable pageable);

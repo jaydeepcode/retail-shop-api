@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.mangle.retailshopapp.settlement.Amounts;
 import com.mangle.retailshopapp.settlement.SettlementLine;
+import com.mangle.retailshopapp.settings.SettingService;
 import com.mangle.retailshopapp.ticket.domain.BookingMode;
 import com.mangle.retailshopapp.ticket.model.TktBooking;
 import com.mangle.retailshopapp.ticket.model.request.CreateBookingRequest;
@@ -69,13 +70,16 @@ public class TicketController {
 
     private final TicketBookingService bookingService;
     private final UserRepository users;
+    private final SettingService settings;
     private final Clock clock;
 
     public TicketController(TicketBookingService bookingService,
                             UserRepository users,
+                            SettingService settings,
                             Clock clock) {
         this.bookingService = bookingService;
         this.users = users;
+        this.settings = settings;
         this.clock = clock;
     }
 
@@ -268,11 +272,21 @@ public class TicketController {
     // Mapping
     // ------------------------------------------------------------------
 
-    /** The 201's body, where the tender is still in hand. */
-    private static BookingResponse justBooked(TktBooking b,
-                                              com.mangle.retailshopapp.settlement.TenderPlan tender,
-                                              Long voucherId) {
-        return toResponse(b, TicketResponseMapper.lines(tender), voucherId);
+    /**
+     * The 201's body, where the tender is still in hand.
+     *
+     * <p>⚠ NOT STATIC ANY MORE, because the change-display threshold is now read
+     * from {@code rc_setting} through {@link SettingService} instead of being a
+     * literal in {@code TicketResponseMapper} (next-session-s5.md item 3). The
+     * figure and the rule were always the recharge counter's; only the route to
+     * them was missing.
+     */
+    private BookingResponse justBooked(TktBooking b,
+                                       com.mangle.retailshopapp.settlement.TenderPlan tender,
+                                       Long voucherId) {
+        return toResponse(b,
+                TicketResponseMapper.lines(tender, settings.changeDisplayThreshold()),
+                voucherId);
     }
 
     private static BookingResponse toResponse(TktBooking b,

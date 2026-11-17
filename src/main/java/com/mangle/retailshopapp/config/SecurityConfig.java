@@ -52,6 +52,49 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests((authorizeRequests) -> authorizeRequests
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                        // ⚠ THE LEDGER'S PATHS ARE GATED *ABOVE* THE SPA SHELL
+                        // LINE BELOW, AND THAT PLACEMENT IS THE WHOLE POINT.
+                        //
+                        // That line permits "/*" for index.html and the built
+                        // assets, and Ant's /* matches any path of exactly ONE
+                        // segment. Matchers are evaluated IN ORDER, so anything
+                        // gated below it that happens to be one segment long is
+                        // never reached and is effectively PUBLIC. Two of this
+                        // slice's endpoints are one segment long:
+                        //
+                        //     GET /config    — design-ledger-api.md item 3
+                        //     GET /accounts  — endpoint 12, the chart of accounts
+                        //
+                        // Both were reachable with no token at all until these
+                        // moved up here, and BOTH WERE FOUND BY A TEST RATHER
+                        // THAN BY READING THIS FILE: ConfigControllerTest's
+                        // unauthenticatedIsRefused and LedgerSecurityTest's
+                        // customerCannotReadTheAccounts, which failed on
+                        // "expected:<403> but was:<200>" — a water
+                        // ROLE_CUSTOMER token listing every account the shop
+                        // holds. Putting any of these three back below the shell
+                        // line is what those tests exist to catch.
+                        //
+                        // /accounts/** and /vouchers/** are here rather than
+                        // further down for the same reason: "/accounts/**"
+                        // matches the bare /accounts, but only if it is reached.
+                        //
+                        // The two authorities are the recharge counter's, not a
+                        // new role. §3's "one ROLE_STAFF is enough" is about the
+                        // default being DENY rather than about designing a role
+                        // hierarchy, and introducing a third authority would
+                        // touch every token issued — S0b's work, not this
+                        // slice's.
+                        //
+                        // ⚠ /reports/** needs the same line when its controllers
+                        // arrive. It is not added now, because a matcher for a
+                        // path nothing serves reads as though it had been
+                        // reviewed.
+                        .requestMatchers("/accounts/**", "/vouchers/**", "/config")
+                                .hasAnyAuthority(SecurityConstants.ADMIN_USER,
+                                                 SecurityConstants.NORMAL_USER)
+
                         .requestMatchers("/*", "/index.html", "/static/**", "/assets/**").permitAll()
                         // Public endpoints - specific paths first
                         .requestMatchers("/authenticate", "/refresh-token").permitAll()
@@ -104,28 +147,13 @@ public class SecurityConfig {
                                 .hasAnyAuthority(SecurityConstants.ADMIN_USER,
                                                  SecurityConstants.NORMAL_USER)
 
-                        // ⚠ EXPLICITLY GATED IN THE SAME RELEASE THAT INTRODUCES
-                        // THEM, which design-ledger-api.md §3 requires in as many
-                        // words: these endpoints "move money between accounts and
-                        // close the books", and the fall-through below would let a
-                        // water ROLE_CUSTOMER token reach them, since no
-                        // ROLE_STAFF exists.
-                        //
-                        // The two authorities are the recharge counter's, not a
-                        // new role. §3's "one ROLE_STAFF is enough" is about the
-                        // default being DENY rather than about designing a role
-                        // hierarchy — "the point is that the default must be deny,
-                        // not that the role hierarchy needs designing" — and
-                        // introducing a third authority would touch every token
-                        // issued, which is S0b's work and not this slice's.
-                        //
-                        // /vouchers/** and /reports/** need the same line when
-                        // their controllers arrive; they are not added here
-                        // because a matcher for a path nothing serves reads as
-                        // though it had been reviewed.
-                        .requestMatchers("/accounts/**")
-                                .hasAnyAuthority(SecurityConstants.ADMIN_USER,
-                                                 SecurityConstants.NORMAL_USER)
+                        // ⚠ THE LEDGER'S PATHS ARE GATED NEAR THE TOP OF THIS
+                        // CHAIN, NOT HERE — see the block above the SPA shell
+                        // line and the reason it has to be there. §3 requires
+                        // them gated "in the same release that introduces them,
+                        // not after", because they "move money between accounts
+                        // and close the books" and the fall-through below would
+                        // let a water ROLE_CUSTOMER token reach them.
 
                         // ⚠ STILL OUTSTANDING, and S3 does not close it: 23 of the
                         // endpoints below fall through to authenticated-only, which
