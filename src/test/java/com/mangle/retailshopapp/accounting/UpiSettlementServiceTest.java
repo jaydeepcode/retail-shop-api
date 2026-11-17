@@ -416,6 +416,41 @@ class UpiSettlementServiceTest {
         }
 
         @Test
+        @DisplayName("⚠ 422 when a close BOOKED a variance for that date, even at equal figures")
+        void refusesToExtendACloseThatBookedAVariance() {
+            // Found by running it. The amount check alone cannot see this: a
+            // close of UPI_CLEARING on a day with no collections writes
+            // COUNTED_AMOUNT 0.00, which is exactly what "no settlements yet"
+            // looks like — so the row would be extended and the close's evidence
+            // overwritten. VARIANCE_VOUCHER_ID is the exact discriminator,
+            // because a settlement never sets one.
+            collectUpi(SEP_30, "3450.00");
+            // ⚠ A PARTIAL write-off (1,000 of 3,450), so 2,450 is still shown as
+            // collected and the discriminator below is what refuses the
+            // settlement. A write-off for the WHOLE amount nets that collection
+            // date to zero and the earlier "nothing was collected on …" refusal
+            // fires first instead — correct, and not what this test is about.
+            long varianceVoucher = tx.execute(status -> postings.post(new VoucherDraft(
+                    "JOURNAL", SEP_30, SEP_30.atTime(20, 0), "a close booked this",
+                    "CASH_RECON", null, null, null, NO_STAFF,
+                    List.of(VoucherLeg.debit("EXP_RCHG_LOSS", new BigDecimal("1000.00")),
+                            VoucherLeg.credit("UPI_CLEARING", new BigDecimal("1000.00")))))
+                    .voucherId());
+            jdbc.update("INSERT INTO acc_reconciliation (ACCOUNT_CODE, RECON_DATE, "
+                    + "COUNTED_AMOUNT, LEDGER_AMOUNT, VARIANCE_VOUCHER_ID, CLOSED_AT) "
+                    + "VALUES ('UPI_CLEARING', ?, 0.00, 0.00, ?, NOW())",
+                    SEP_30, varianceVoucher);
+
+            LedgerPostingException refused = assertThrows(LedgerPostingException.class,
+                    () -> service.settle(new UpiSettlementRequest(SEP_30, OCT_1,
+                            new BigDecimal("100.00"), null), "key-close-variance", NO_STAFF));
+            assertTrue(refused.getMessage().contains("written by a close (endpoint 4)"),
+                    refused.getMessage());
+            assertTrue(refused.getMessage().contains("a settlement never books one"),
+                    refused.getMessage());
+        }
+
+        @Test
         @DisplayName("⚠ a missing bank setting is a 500, not a guess")
         void aMissingBankSettingFailsLoudly() {
             // log §9.3: this key has no fallback ON PURPOSE. The request is not

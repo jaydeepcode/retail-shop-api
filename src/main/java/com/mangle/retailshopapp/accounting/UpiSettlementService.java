@@ -303,6 +303,27 @@ public class UpiSettlementService {
         }
 
         AccReconciliation row = existing.get();
+
+        // ⚠ AN EXACT DISCRIMINATOR, ADDED AFTER RUNNING IT. The amount check
+        // below is the general one, but it cannot see a close row whose counted
+        // figure HAPPENS to equal the settlements so far — closing UPI_CLEARING
+        // for a day with no collections writes counted 0.00, and 0.00 is also
+        // what "no settlements yet" looks like. A settlement would then extend a
+        // close's row and overwrite the evidence it was written to hold.
+        //
+        // VARIANCE_VOUCHER_ID is the tell: a settlement NEVER sets it, because
+        // money in transit is not booked (§1.2), while a close with any variance
+        // always does. So a row carrying one was written by endpoint 4 and is not
+        // this endpoint's to touch, whatever its figures say.
+        require(row.getVarianceVoucherId() == null,
+                "UPI_CLEARING's reconciliation row for " + request.collectionDate()
+                        + " carries variance voucher " + row.getVarianceVoucherId()
+                        + ", so it was written by a close (endpoint 4) that BOOKED that "
+                        + "difference — a settlement never books one. Extending it would "
+                        + "overwrite the evidence of that close. If the residue was written off "
+                        + "in error, correct it with a JOURNAL against the expense account the "
+                        + "close named.");
+
         require(paise(row.getCountedAmount()).compareTo(settledSoFar) == 0,
                 "UPI_CLEARING already has a reconciliation row for " + request.collectionDate()
                         + " recording " + row.getCountedAmount() + " counted, but the settlement "
