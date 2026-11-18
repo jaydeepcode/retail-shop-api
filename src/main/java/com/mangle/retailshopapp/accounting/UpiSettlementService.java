@@ -86,12 +86,24 @@ import com.mangle.retailshopapp.settings.SettingService;
  * (§1.2). A row with a non-zero variance and no voucher is precisely what "still
  * owed by the bank" looks like.
  *
- * <p>⚠ <b>And the row is CHECKED against the settlement vouchers before being
+ * <p>⚠ <b>And the row's PROVENANCE is checked three ways before it is
  * extended</b>, because endpoint 4 can also write a row for this account and
  * date — {@code UPI_CLEARING} is {@code IS_RECONCILABLE = TRUE} and in no pool,
  * so it is closeable there. Accumulating onto a figure a close wrote would
- * corrupt both. The vouchers are append-only and are the authority; the row is
- * the evidence. When they disagree, this refuses and says so.
+ * destroy the evidence that close exists to hold. The vouchers are append-only
+ * and are the authority; the row is the evidence. {@link #upsertRow} has the
+ * three checks and why each was needed — <b>each one was added because the
+ * previous set let a real case through</b>, and the narrowest of them, "has any
+ * settlement happened for this date at all", is the one that catches a close of
+ * a quiet day: zero counted, zero ledger, and no variance voucher, because
+ * there was no difference to book.
+ *
+ * <p>⚠ <b>ONE CASE REMAINS OPEN AND IS DOCUMENTED RATHER THAN CHASED</b>
+ * (design-ledger-api.md §1.2): a close whose counted figure happens to equal a
+ * NON-zero settled total for that date still passes all three. It is narrower
+ * again and the same shape, and an exact answer needs
+ * {@code acc_reconciliation} to record which endpoint wrote the row — a column,
+ * and therefore a migration, which is S6's.
  */
 @Service
 public class UpiSettlementService {
@@ -304,17 +316,37 @@ public class UpiSettlementService {
 
         AccReconciliation row = existing.get();
 
-        // ⚠ AN EXACT DISCRIMINATOR, ADDED AFTER RUNNING IT. The amount check
-        // below is the general one, but it cannot see a close row whose counted
-        // figure HAPPENS to equal the settlements so far — closing UPI_CLEARING
-        // for a day with no collections writes counted 0.00, and 0.00 is also
-        // what "no settlements yet" looks like. A settlement would then extend a
-        // close's row and overwrite the evidence it was written to hold.
+        // ⚠ THREE CHECKS, AND EACH ONE EXISTS BECAUSE THE PREVIOUS SET LET A
+        // REAL CASE THROUGH. The row being extended must have been written by a
+        // settlement; endpoint 4 can write one for this same account and date,
+        // because UPI_CLEARING is IS_RECONCILABLE = TRUE and in no pool, and
+        // accumulating onto a close's figures destroys the evidence that close
+        // was written to hold.
         //
-        // VARIANCE_VOUCHER_ID is the tell: a settlement NEVER sets it, because
-        // money in transit is not booked (§1.2), while a close with any variance
-        // always does. So a row carrying one was written by endpoint 4 and is not
-        // this endpoint's to touch, whatever its figures say.
+        // 1. A SETTLEMENT HAS HAPPENED FOR THIS DATE AT ALL. The narrowest
+        //    statement of the rule and the one that catches the quiet day: a
+        //    close on a date when the account was empty writes COUNTED_AMOUNT
+        //    0.00, LEDGER_AMOUNT 0.00 and — having found no difference — NO
+        //    variance voucher, so checks 2 and 3 both pass it. Reproduced
+        //    against a real database: collections dated that day posted late,
+        //    then a settlement, and the row silently became 100.00 / 3450.00.
+        //
+        //    It is sound because a settlement's row cannot exist unless a
+        //    settlement already happened for that date — the FIRST settlement
+        //    takes the isEmpty() branch above and inserts, and settledAmount <= 0
+        //    is already a 422 — so an existing row with nothing settled against
+        //    its date was written by something else. And it cannot break a call
+        //    that works today: every settlement that reaches this line is a
+        //    later one, which has settledSoFar > 0 by construction.
+        require(settledSoFar.signum() > 0,
+                "UPI_CLEARING already has a reconciliation row for " + request.collectionDate()
+                        + " but no settlement has ever been recorded against that date, so a "
+                        + "settlement did not write it — a close (endpoint 4) did. Extending it "
+                        + "would overwrite the evidence of that close.");
+
+        // 2. THE CLOSE BOOKED A DIFFERENCE. VARIANCE_VOUCHER_ID is the tell: a
+        //    settlement NEVER sets it, because money in transit is not booked
+        //    (§1.2), while a close that found any difference always does.
         require(row.getVarianceVoucherId() == null,
                 "UPI_CLEARING's reconciliation row for " + request.collectionDate()
                         + " carries variance voucher " + row.getVarianceVoucherId()
@@ -324,6 +356,9 @@ public class UpiSettlementService {
                         + "in error, correct it with a JOURNAL against the expense account the "
                         + "close named.");
 
+        // 3. THE FIGURES AGREE with what the settlement vouchers say — the
+        //    general check, and the authority is the vouchers, which are
+        //    append-only once sealed.
         require(paise(row.getCountedAmount()).compareTo(settledSoFar) == 0,
                 "UPI_CLEARING already has a reconciliation row for " + request.collectionDate()
                         + " recording " + row.getCountedAmount() + " counted, but the settlement "

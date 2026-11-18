@@ -401,16 +401,25 @@ class UpiSettlementServiceTest {
             // UPI_CLEARING is IS_RECONCILABLE = TRUE and in no pool, so
             // endpoint 4 can close it for any date and write exactly this row.
             // Adding to it would leave one row claiming to be two kinds of count.
+            //
+            // ⚠ A REAL SETTLEMENT FIRST, SO THIS TEST STILL REACHES THE CHECK IT
+            // WAS WRITTEN FOR. The figures check is the third of three, and the
+            // first — "has any settlement happened for this date at all" —
+            // would otherwise refuse the call before it, which is what happened
+            // when that check was added. The fixture now matches the real
+            // sequence anyway: a date part-settled, then its row interfered with.
             collectUpi(SEP_30, "3450.00");
-            jdbc.update("INSERT INTO acc_reconciliation (ACCOUNT_CODE, RECON_DATE, "
-                    + "COUNTED_AMOUNT, LEDGER_AMOUNT, CLOSED_AT) "
-                    + "VALUES ('UPI_CLEARING', ?, 1000.00, 3450.00, NOW())", SEP_30);
+            service.settle(new UpiSettlementRequest(SEP_30, OCT_1, new BigDecimal("200.00"),
+                    null), "key-foreign-row-first", NO_STAFF);
+            jdbc.update("UPDATE acc_reconciliation SET COUNTED_AMOUNT = 1000.00 "
+                    + "WHERE ACCOUNT_CODE = 'UPI_CLEARING' AND RECON_DATE = ?", SEP_30);
 
             LedgerPostingException refused = assertThrows(LedgerPostingException.class,
                     () -> service.settle(new UpiSettlementRequest(SEP_30, OCT_1,
                             new BigDecimal("100.00"), null), "key-foreign-row", NO_STAFF));
             assertTrue(refused.getMessage().contains("written by something other than a "
                     + "settlement"), refused.getMessage());
+            assertTrue(refused.getMessage().contains("total 200.00"), refused.getMessage());
             assertTrue(refused.getMessage().contains(
                     "/accounts/UPI_CLEARING/reconciliations"), refused.getMessage());
         }
@@ -418,13 +427,28 @@ class UpiSettlementServiceTest {
         @Test
         @DisplayName("⚠ 422 when a close BOOKED a variance for that date, even at equal figures")
         void refusesToExtendACloseThatBookedAVariance() {
-            // Found by running it. The amount check alone cannot see this: a
-            // close of UPI_CLEARING on a day with no collections writes
-            // COUNTED_AMOUNT 0.00, which is exactly what "no settlements yet"
-            // looks like — so the row would be extended and the close's evidence
-            // overwritten. VARIANCE_VOUCHER_ID is the exact discriminator,
-            // because a settlement never sets one.
+            // Found by running it. The amount check alone cannot see a close
+            // row whose COUNTED_AMOUNT happens to equal the settlements so far,
+            // and VARIANCE_VOUCHER_ID is the exact discriminator for the case
+            // below: a close that found a difference always books one, and a
+            // settlement never does.
+            //
+            // ⚠ THIS COMMENT USED TO DESCRIBE A DIFFERENT CASE FROM THE ONE THE
+            // TEST COVERS, which is worth correcting rather than quietly
+            // rewriting: it said "a close of UPI_CLEARING on a day with no
+            // collections writes COUNTED_AMOUNT 0.00" — and that close books
+            // NOTHING, so VARIANCE_VOUCHER_ID is null and this discriminator
+            // does not fire at all. That hole was real and is covered by
+            // refusesToExtendACloseThatBookedNothing below. Two cases, two
+            // checks; the comment claimed one check covered both.
             collectUpi(SEP_30, "3450.00");
+            // ⚠ A REAL SETTLEMENT FIRST, so the "has anything settled for this
+            // date" check passes and THIS test reaches the variance-voucher
+            // discriminator it exists for. See refusesToAccumulateOntoACloseRow
+            // for the same note.
+            service.settle(new UpiSettlementRequest(SEP_30, OCT_1, new BigDecimal("200.00"),
+                    null), "key-close-variance-first", NO_STAFF);
+
             // ⚠ A PARTIAL write-off (1,000 of 3,450), so 2,450 is still shown as
             // collected and the discriminator below is what refuses the
             // settlement. A write-off for the WHOLE amount nets that collection
@@ -436,10 +460,13 @@ class UpiSettlementServiceTest {
                     List.of(VoucherLeg.debit("EXP_RCHG_LOSS", new BigDecimal("1000.00")),
                             VoucherLeg.credit("UPI_CLEARING", new BigDecimal("1000.00")))))
                     .voucherId());
-            jdbc.update("INSERT INTO acc_reconciliation (ACCOUNT_CODE, RECON_DATE, "
-                    + "COUNTED_AMOUNT, LEDGER_AMOUNT, VARIANCE_VOUCHER_ID, CLOSED_AT) "
-                    + "VALUES ('UPI_CLEARING', ?, 0.00, 0.00, ?, NOW())",
-                    SEP_30, varianceVoucher);
+            // The row is the settlement's; a close is then simulated by pointing
+            // it at a booked variance, which is the one thing a settlement never
+            // does. COUNTED_AMOUNT is left at the settled 200.00 on purpose, so
+            // the figures check cannot be what refuses.
+            jdbc.update("UPDATE acc_reconciliation SET VARIANCE_VOUCHER_ID = ? "
+                    + "WHERE ACCOUNT_CODE = 'UPI_CLEARING' AND RECON_DATE = ?",
+                    varianceVoucher, SEP_30);
 
             LedgerPostingException refused = assertThrows(LedgerPostingException.class,
                     () -> service.settle(new UpiSettlementRequest(SEP_30, OCT_1,
@@ -448,6 +475,56 @@ class UpiSettlementServiceTest {
                     refused.getMessage());
             assertTrue(refused.getMessage().contains("a settlement never books one"),
                     refused.getMessage());
+        }
+
+        @Test
+        @DisplayName("⚠ 422 when a close BOOKED NOTHING — the quiet-day row, with no voucher id")
+        void refusesToExtendACloseThatBookedNothing() {
+            // ⚠ THE HOLE IN THE PREVIOUS GUARD, reproduced against a real
+            // database before it was closed. A close of UPI_CLEARING on a day
+            // when the account was empty writes COUNTED_AMOUNT 0.00,
+            // LEDGER_AMOUNT 0.00 and NO variance voucher — nothing to book — so
+            // it is indistinguishable from a settlement's row by either existing
+            // check, and both pass.
+            //
+            // In real terms: UPI_CLEARING is closed on a quiet day, collections
+            // dated that day are posted late, and a settlement arrives for it.
+            // Before the fix the settlement was ACCEPTED and the row became
+            // COUNTED_AMOUNT 100.00 / LEDGER_AMOUNT 3450.00 — the close's
+            // evidence gone, with nothing anywhere recording that it had existed.
+            //
+            // What closes it: a row written BY a settlement cannot exist unless a
+            // settlement already happened for that date, because the FIRST
+            // settlement is what inserts the row and a zero or negative
+            // settledAmount is already a 422. So an existing row with nothing
+            // settled against its date was written by something else.
+            collectUpi(SEP_30, "3450.00");
+            jdbc.update("INSERT INTO acc_reconciliation (ACCOUNT_CODE, RECON_DATE, "
+                    + "COUNTED_AMOUNT, LEDGER_AMOUNT, VARIANCE_VOUCHER_ID, CLOSED_AT) "
+                    + "VALUES ('UPI_CLEARING', ?, 0.00, 0.00, NULL, NOW())", SEP_30);
+
+            LedgerPostingException refused = assertThrows(LedgerPostingException.class,
+                    () -> service.settle(new UpiSettlementRequest(SEP_30, OCT_1,
+                            new BigDecimal("100.00"), null), "key-close-quiet", NO_STAFF));
+            assertTrue(refused.getMessage().contains("no settlement has ever been recorded"),
+                    refused.getMessage());
+            assertTrue(refused.getMessage().contains("a close (endpoint 4) did"),
+                    refused.getMessage());
+
+            // And nothing moved: the close's row is exactly as it was, and no
+            // settlement voucher exists. Asserted because the failure this
+            // guards against is silent — the old behaviour returned 201.
+            assertEquals(new BigDecimal("0.00"), jdbc.queryForObject(
+                    "SELECT COUNTED_AMOUNT FROM acc_reconciliation "
+                            + "WHERE ACCOUNT_CODE = 'UPI_CLEARING' AND RECON_DATE = ?",
+                    BigDecimal.class, SEP_30));
+            assertEquals(new BigDecimal("0.00"), jdbc.queryForObject(
+                    "SELECT LEDGER_AMOUNT FROM acc_reconciliation "
+                            + "WHERE ACCOUNT_CODE = 'UPI_CLEARING' AND RECON_DATE = ?",
+                    BigDecimal.class, SEP_30));
+            assertEquals(0, jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM acc_voucher WHERE SOURCE_TYPE = 'UPI_SETTLEMENT'",
+                    Integer.class));
         }
 
         @Test
